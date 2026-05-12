@@ -7,11 +7,11 @@ dotenv.config();
 const app = express();
 app.use(express.json());
 
-// ═══ Config ═══
+// === Config ===
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const TELEGRAM_API = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}`;
 
-// ═══ Helper: Send message to Telegram ═══
+// === Helper: Send message to Telegram ===
 async function sendTelegram(chatId, text) {
   try {
     await fetch(`${TELEGRAM_API}/sendMessage`, {
@@ -24,38 +24,39 @@ async function sendTelegram(chatId, text) {
       })
     });
   } catch (err) {
-    console.error("❌ Telegram send error:", err.message);
+    console.error("Telegram send error:", err.message);
   }
 }
 
-// ═══ Health check ═══
+// === Health check ===
 app.get("/", (req, res) => {
   res.json({
-    status: "🧠 AURA BOSS is alive",
+    status: "AURA BOSS is alive",
     version: "3.0.0",
     agents: ["finance", "sales", "content", "marketing", "training", "ops", "architect"],
     timestamp: new Date().toISOString()
   });
 });
 
-// ═══ TELEGRAM WEBHOOK ═══
+// === TELEGRAM WEBHOOK ===
 app.post("/telegram", async (req, res) => {
   try {
     const message = req.body.message || req.body.edited_message;
     if (!message || !message.text) {
-      return res.sendStatus(200); // Ignore non-text updates
+      return res.sendStatus(200);
     }
 
     const chatId = message.chat.id;
     const userText = message.text;
     const userName = message.from?.first_name || "User";
 
-    console.log("\n🧠 ═══════════════════════════════════");
-    console.log(`📩 Telegram from ${userName}: ${userText}`);
-    console.log("═══════════════════════════════════\n");
+    console.log("\n=== TELEGRAM MESSAGE ===");
+    console.log("From:", userName);
+    console.log("Text:", userText);
+    console.log("========================\n");
 
     // Send "thinking" indicator
-    await sendTelegram(chatId, "🧠 AURA sedang fikir...");
+    await sendTelegram(chatId, "AURA sedang fikir...");
 
     // Run orchestrator
     const result = await runOrchestrator(userText, {
@@ -72,48 +73,51 @@ app.post("/telegram", async (req, res) => {
     // Send response back to Telegram
     await sendTelegram(chatId, responseText);
 
-    console.log("✅ Response sent to Telegram");
+    console.log("Response sent to Telegram");
     res.sendStatus(200);
 
   } catch (err) {
-    console.error("❌ Telegram webhook error:", err.message);
-    
-    // Try to notify user about error
+    console.error("Telegram webhook error:", err.message);
+
     const chatId = req.body?.message?.chat?.id;
     if (chatId) {
-      await sendTelegram(chatId, "⚠️ Maaf, AURA ada masalah teknikal. Cuba lagi.");
+      await sendTelegram(chatId, "Maaf, AURA ada masalah teknikal. Cuba lagi.");
     }
-    res.sendStatus(200); // Always return 200 to Telegram
+    res.sendStatus(200);
   }
 });
 
-// ═══ Main task endpoint (for API/n8n calls) ═══
+// === Main task endpoint (for API/n8n calls) ===
 app.post("/task", async (req, res) => {
   try {
     const { task, context, priority } = req.body;
-    if (!task) return res.status(400).json({ error: "Task is required" });
+    if (!task) {
+      return res.status(400).json({ error: "Task is required" });
+    }
 
-    console.log("\n🧠 ═══════════════════════════════════");
-    console.log("📥 BOSS received task:", task);
-    console.log("═══════════════════════════════════\n");
+    console.log("\n=== TASK RECEIVED ===");
+    console.log("Task:", task);
+    console.log("=====================\n");
 
     const result = await runOrchestrator(task, { ...context, priority });
     res.json({ success: true, result });
   } catch (err) {
-    console.error("❌ Error:", err.message);
+    console.error("Error:", err.message);
     res.status(500).json({ error: err.message });
   }
 });
 
-// ═══ Webhook for n8n callbacks ═══
+// === Webhook for n8n callbacks ===
 app.post("/webhook/:source", async (req, res) => {
   const { source } = req.params;
-  console.log(`📡 Webhook from ${source}`);
-  const result = await runOrchestrator(`webhook from ${source}: ${JSON.stringify(req.body)}`);
+  console.log("Webhook from", source);
+  const result = await runOrchestrator(
+    "webhook from " + source + ": " + JSON.stringify(req.body)
+  );
   res.json({ received: true, result });
 });
 
-// ═══ Agent status endpoint ═══
+// === Agent status endpoint ===
 app.get("/agents", (req, res) => {
   res.json({
     boss: "AURA Orchestrator",
@@ -129,8 +133,34 @@ app.get("/agents", (req, res) => {
   });
 });
 
-// ═══ Start Server ═══
+// === Start Server ===
 const PORT = process.env.PORT || 3000;
+
 app.listen(PORT, async () => {
-  console.log("🧠 ═══════════════════════════════════");
-  console.log(`✅ AURA BOSS running on port ${PORT}`);
+  console.log("===================================");
+  console.log("AURA BOSS running on port " + PORT);
+  console.log("LLM: " + (process.env.OPENROUTER_MODEL || "not set"));
+  console.log("7 Agents ready");
+  console.log("Telegram webhook path: /telegram");
+  console.log("===================================");
+
+  // Auto-register Telegram webhook on startup
+  if (TELEGRAM_BOT_TOKEN) {
+    try {
+      const webhookUrl = "https://web-production-9224c.up.railway.app/telegram";
+      const resp = await fetch(
+        TELEGRAM_API + "/setWebhook?url=" + encodeURIComponent(webhookUrl)
+      );
+      const data = await resp.json();
+      if (data.ok) {
+        console.log("Telegram webhook registered:", webhookUrl);
+      } else {
+        console.error("Telegram webhook failed:", data.description);
+      }
+    } catch (err) {
+      console.error("Telegram webhook setup error:", err.message);
+    }
+  } else {
+    console.log("WARNING: TELEGRAM_BOT_TOKEN not set");
+  }
+});
