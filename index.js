@@ -34,3 +34,36 @@ app.post("/task", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
+// Webhook for n8n / Telegram callbacks
+app.post("/webhook/:source", async (req, res) => {
+  const { source } = req.params;
+  console.log(`\uD83D\uDCE1 Webhook from ${source}`);
+  const result = await runOrchestrator(`webhook from ${source}: ${JSON.stringify(req.body)}`);
+  res.json({ received: true, result });
+});
+
+// Agent status endpoint
+app.get("/agents", (req, res) => {
+  res.json({
+    boss: "AURA Orchestrator",
+    agents: [
+      { name: "finance", role: "Invoice, resit, ROI, expense tracking" },
+      { name: "sales", role: "Customer reply, CRM, quotation" },
+      { name: "content", role: "Copywriting, caption, video script" },
+      { name: "marketing", role: "Ads strategy, campaign, analytics" },
+      { name: "training", role: "Module, slides, quiz, SOP" },
+      { name: "ops", role: "Daily log, briefing, scheduling" },
+      { name: "architect", role: "System upgrade, debug, optimization" }
+    ]
+  });
+});
+
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+  console.log("\uD83E\uDDE0 \u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550");
+  console.log(`\u2705 AURA BOSS running on port ${PORT}`);
+  console.log(`\uD83E\uDD16 LLM: ${process.env.OPENROUTER_MODEL}`);
+  console.log("\uD83D\uDC65 7 Agents ready");
+  console.log("\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550");
+});
