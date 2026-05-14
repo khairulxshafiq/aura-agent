@@ -20,8 +20,8 @@ async function sendTelegram(chatId, text) {
       body: JSON.stringify({
         chat_id: chatId,
         text: text,
-        parse_mode: "Markdown"
-      })
+        parse_mode: "Markdown",
+      }),
     });
   } catch (err) {
     console.error("Telegram send error:", err.message);
@@ -34,7 +34,7 @@ app.get("/", (req, res) => {
     status: "AURA BOSS is alive",
     version: "3.0.0",
     agents: ["finance", "sales", "content", "marketing", "training", "ops", "architect"],
-    timestamp: new Date().toISOString()
+    timestamp: new Date().toISOString(),
   });
 });
 
@@ -62,20 +62,20 @@ app.post("/telegram", async (req, res) => {
     const result = await runOrchestrator(userText, {
       source: "telegram",
       userName: userName,
-      chatId: chatId
+      chatId: chatId,
     });
 
     // Extract response text
-    const responseText = typeof result === "string"
-      ? result
-      : result?.response || result?.result || JSON.stringify(result);
+    const responseText =
+      typeof result === "string"
+        ? result
+        : result?.response || result?.result || JSON.stringify(result);
 
     // Send response back to Telegram
     await sendTelegram(chatId, responseText);
 
     console.log("Response sent to Telegram");
     res.sendStatus(200);
-
   } catch (err) {
     console.error("Telegram webhook error:", err.message);
 
@@ -128,8 +128,8 @@ app.get("/agents", (req, res) => {
       { name: "marketing", role: "Ads strategy, campaign, analytics" },
       { name: "training", role: "Module, slides, quiz, SOP" },
       { name: "ops", role: "Daily log, briefing, scheduling" },
-      { name: "architect", role: "System upgrade, debug, optimization" }
-    ]
+      { name: "architect", role: "System upgrade, debug, optimization" },
+    ],
   });
 });
 
