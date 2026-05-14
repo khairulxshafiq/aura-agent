@@ -11,20 +11,57 @@ app.use(express.json());
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const TELEGRAM_API = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}`;
 
-// === Helper: Send message to Telegram ===
+// === Helper: Escape Telegram MarkdownV2 special characters ===
+function escapeTelegramMd(text) {
+  if (!text) return "";
+  return text.replace(/([_*\[\]()~`>#+\-=|{}.!\\])/g, "\\$1");
+}
+
+// === Helper: Send message to Telegram (with auto-fallback) ===
 async function sendTelegram(chatId, text) {
-  try {
-    await fetch(`${TELEGRAM_API}/sendMessage`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        chat_id: chatId,
-        text: text,
-        parse_mode: "Markdown",
-      }),
-    });
-  } catch (err) {
-    console.error("Telegram send error:", err.message);
+  if (!text || !chatId) return;
+
+  // Telegram max message length = 4096 characters
+  const MAX_LENGTH = 4000;
+
+  // Split long messages into chunks
+  const chunks = [];
+  let remaining = text;
+  while (remaining.length > 0) {
+    chunks.push(remaining.substring(0, MAX_LENGTH));
+    remaining = remaining.substring(MAX_LENGTH);
+  }
+
+  for (const chunk of chunks) {
+    try {
+      // Try sending as plain text first (most reliable)
+      const response = await fetch(`${TELEGRAM_API}/sendMessage`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          chat_id: chatId,
+          text: chunk,
+        }),
+      });
+
+      const result = await response.json();
+
+      if (!result.ok) {
+        console.error("Telegram send failed:", result.description);
+
+        // Fallback: try sending a simplified version
+        await fetch(`${TELEGRAM_API}/sendMessage`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            chat_id: chatId,
+            text: chunk.substring(0, 500) + "\n\n[mesej dipendekkan]",
+          }),
+        });
+      }
+    } catch (err) {
+      console.error("Telegram send error:", err.message);
+    }
   }
 }
 
