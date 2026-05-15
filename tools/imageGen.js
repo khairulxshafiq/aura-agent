@@ -1,3 +1,5 @@
+// tools/imageGen.js
+
 import OpenAI from "openai";
 
 const client = new OpenAI({
@@ -7,11 +9,34 @@ const client = new OpenAI({
 
 export async function generateImage(prompt) {
 
-  const response = await client.images.generate({
-    model: "black-forest-labs/flux-schnell",
-    prompt,
-    size: "1024x1024"
-  });
+  try {
 
-  return response.data[0].url;
+    console.log("🎨 IMAGE GENERATION STARTED");
+    console.log("📝 PROMPT:", prompt);
+
+    const response = await client.images.generate({
+      model: "black-forest-labs/flux-schnell",
+      prompt,
+      size: "1024x1024"
+    });
+
+    const imageUrl = response?.data?.[0]?.url;
+
+    if (!imageUrl) {
+
+      console.error("❌ No image URL returned");
+
+      return null;
+    }
+
+    console.log("✅ IMAGE GENERATED");
+
+    return imageUrl;
+
+  } catch (error) {
+
+    console.error("❌ IMAGE GENERATION ERROR:", error);
+
+    return null;
+  }
 }
