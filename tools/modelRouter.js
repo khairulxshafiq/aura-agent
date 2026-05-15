@@ -1,56 +1,24 @@
-// tools/modelRouter.js — AURA Dynamic Model Selection
+export function chooseModel(task) {
+  if (!task) task = "";
+  var lower = task.toLowerCase();
 
-export function chooseModel(task = "") {
+  var isCoding = lower.includes("code") || lower.includes("bug") || lower.includes("error") || lower.includes("logs") || lower.includes("debug") || lower.includes("fix") || lower.includes("api") || lower.includes("deploy");
 
-  const lower = task.toLowerCase();
+  var isResearch = lower.includes("research") || lower.includes("analyze") || lower.includes("trend") || lower.includes("report");
 
-  //error") ||  // CODING / DEBUG
-    lower.includes("logs") ||
-    lower.includes("debug") ||
-    lower.includes("fix") ||
-    lower.includes("api") ||
-    lower.includes("deploy")
-  ) {
-    return {
-      model: "deepseek/deepseek-chat-v3-0324",
-      reason: "Cheap + powerful for coding/debugging",
-    };
+  var isCreative = lower.includes("caption") || lower.includes("creative") || lower.includes("marketing") || lower.includes("campaign") || lower.includes("content") || lower.includes("copywriting");
+
+  if (isCoding) {
+    return { model: "deepseek/deepseek-chat-v3-0324", reason: "Cheap and powerful for coding" };
   }
 
-  // RESEARCH / ANALYSIS
-  if (
-    lower.includes("research") ||
-    lower.includes("analyze") ||
-    lower.includes("trend") ||
-    lower.includes("report")
-  ) {
-    return {
-      model: "google/gemini-2.0-flash-001",
-      reason: "Strong reasoning, fast, cheap",
-    };
+  if (isResearch) {
+    return { model: "google/gemini-2.0-flash-001", reason: "Strong reasoning fast cheap" };
   }
 
-  // CREATIVE / CONTENT
-  if (
-    lower.includes("caption") ||
-    lower.includes("creative") ||
-    lower.includes("marketing") ||
-    lower.includes("campaign") ||
-    lower.includes("content") ||
-    lower.includes("copywriting")
-  ) {
-    return {
-      model: "google/gemini-2.0-flash-001",
-      reason: "Creative + cheap",
-    };
+  if (isCreative) {
+    return { model: "google/gemini-2.0-flash-001", reason: "Creative and cheap" };
   }
 
-  // DEFAULT — fast and cheap
-  return {
-    model: "google/gemini-2.0-flash-001",
-    reason: "Fast cheap fallback",
-  };
+  return { model: "google/gemini-2.0-flash-001", reason: "Fast cheap fallback" };
 }
-  if (
-    lower.includes("code") ||
-    lower.includes("bug") ||
