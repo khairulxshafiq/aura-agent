@@ -1,6 +1,6 @@
 import express from "express";
 import dotenv from "dotenv";
-import { runOrchestrator } from "./orchestrator.js";
+import { runOrchestrator, callN8nWorkflow } from "./orchestrator.js";
 
 dotenv.config();
 
@@ -11,20 +11,12 @@ app.use(express.json());
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const TELEGRAM_API = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}`;
 
-// === Helper: Escape Telegram MarkdownV2 special characters ===
-function escapeTelegramMd(text) {
-  if (!text) return "";
-  return text.replace(/([_*\[\]()~`>#+\-=|{}.!\\])/g, "\\$1");
-}
-
 // === Helper: Send message to Telegram (with auto-fallback) ===
 async function sendTelegram(chatId, text) {
   if (!text || !chatId) return;
 
-  // Telegram max message length = 4096 characters
   const MAX_LENGTH = 4000;
 
-  // Split long messages into chunks
   const chunks = [];
   let remaining = text;
   while (remaining.length > 0) {
@@ -34,7 +26,6 @@ async function sendTelegram(chatId, text) {
 
   for (const chunk of chunks) {
     try {
-      // Try sending as plain text first (most reliable)
       const response = await fetch(`${TELEGRAM_API}/sendMessage`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -49,7 +40,6 @@ async function sendTelegram(chatId, text) {
       if (!result.ok) {
         console.error("Telegram send failed:", result.description);
 
-        // Fallback: try sending a simplified version
         await fetch(`${TELEGRAM_API}/sendMessage`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -68,9 +58,10 @@ async function sendTelegram(chatId, text) {
 // === Health check ===
 app.get("/", (req, res) => {
   res.json({
-    status: "AURA BOSS is alive",
-    version: "3.0.0",
-    agents: ["finance", "sales", "content", "marketing", "training", "ops", "architect"],
+    status: "AURA is alive",
+    version: "3.1.0",
+    agents: ["content", "finance", "sales", "marketing", "training", "ops", "architect"],
+    n8n: process.env.N8N_WEBHOOK_URL ? "connected" : "not configured",
     timestamp: new Date().toISOString(),
   });
 });
@@ -92,23 +83,19 @@ app.post("/telegram", async (req, res) => {
     console.log("Text:", userText);
     console.log("========================\n");
 
-    // Send "thinking" indicator
     await sendTelegram(chatId, "AURA sedang fikir...");
 
-    // Run orchestrator
     const result = await runOrchestrator(userText, {
       source: "telegram",
       userName: userName,
       chatId: chatId,
     });
 
-    // Extract response text
     const responseText =
       typeof result === "string"
         ? result
         : result?.response || result?.result || JSON.stringify(result);
 
-    // Send response back to Telegram
     await sendTelegram(chatId, responseText);
 
     console.log("Response sent to Telegram");
@@ -118,13 +105,13 @@ app.post("/telegram", async (req, res) => {
 
     const chatId = req.body?.message?.chat?.id;
     if (chatId) {
-      await sendTelegram(chatId, "Maaf, AURA ada masalah teknikal. Cuba lagi.");
+      await sendTelegram(chatId, "Alamak ada glitch kejap. Cuba lagi ya!");
     }
     res.sendStatus(200);
   }
 });
 
-// === Main task endpoint (for API/n8n calls) ===
+// === Task endpoint (for API/n8n calls) ===
 app.post("/task", async (req, res) => {
   try {
     const { task, context, priority } = req.body;
@@ -144,6 +131,18 @@ app.post("/task", async (req, res) => {
   }
 });
 
+// === n8n trigger endpoint ===
+app.post("/n8n/trigger", async (req, res) => {
+  try {
+    const { webhookUrl, payload } = req.body;
+    const result = await callN8nWorkflow(webhookUrl, payload);
+    res.json({ success: true, result });
+  } catch (err) {
+    console.error("n8n trigger error:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // === Webhook for n8n callbacks ===
 app.post("/webhook/:source", async (req, res) => {
   const { source } = req.params;
@@ -157,15 +156,15 @@ app.post("/webhook/:source", async (req, res) => {
 // === Agent status endpoint ===
 app.get("/agents", (req, res) => {
   res.json({
-    boss: "AURA Orchestrator",
+    boss: "AURA Orchestrator v3.1",
     agents: [
-      { name: "finance", role: "Invoice, resit, ROI, expense tracking" },
-      { name: "sales", role: "Customer reply, CRM, quotation" },
-      { name: "content", role: "Copywriting, caption, video script" },
-      { name: "marketing", role: "Ads strategy, campaign, analytics" },
-      { name: "training", role: "Module, slides, quiz, SOP" },
-      { name: "ops", role: "Daily log, briefing, scheduling" },
-      { name: "architect", role: "System upgrade, debug, optimization" },
+      { name: "content", role: "Chat, copywriting, captions, scripts (DEFAULT)" },
+      { name: "finance", role: "Pricing, costs, invoicing, ROI" },
+      { name: "sales", role: "Customer replies, quotations, CRM" },
+      { name: "marketing", role: "Ads strategy, campaigns, analytics" },
+      { name: "training", role: "SOPs, training modules, quizzes" },
+      { name: "ops", role: "Operations, scheduling, logistics" },
+      { name: "architect", role: "System design, debugging, tech" },
     ],
   });
 });
@@ -175,13 +174,12 @@ const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, async () => {
   console.log("===================================");
-  console.log("AURA BOSS running on port " + PORT);
+  console.log("AURA v3.1 running on port " + PORT);
   console.log("LLM: " + (process.env.OPENROUTER_MODEL || "not set"));
+  console.log("n8n: " + (process.env.N8N_WEBHOOK_URL || "not configured"));
   console.log("7 Agents ready");
-  console.log("Telegram webhook path: /telegram");
   console.log("===================================");
 
-  // Auto-register Telegram webhook on startup
   if (TELEGRAM_BOT_TOKEN) {
     try {
       const webhookUrl = "https://web-production-9224c.up.railway.app/telegram";
@@ -190,12 +188,12 @@ app.listen(PORT, async () => {
       );
       const data = await resp.json();
       if (data.ok) {
-        console.log("Telegram webhook registered:", webhookUrl);
+        console.log("Telegram webhook:", webhookUrl);
       } else {
         console.error("Telegram webhook failed:", data.description);
       }
     } catch (err) {
-      console.error("Telegram webhook setup error:", err.message);
+      console.error("Telegram webhook error:", err.message);
     }
   } else {
     console.log("WARNING: TELEGRAM_BOT_TOKEN not set");
