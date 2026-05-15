@@ -34,109 +34,140 @@ export async function callToolLLM(systemPrompt, userMessage, model) {
     return data.choices?.[0]?.message?.content || null;
   } catch (err) {
     console.error("[AI] LLM failed:", err.message);
+    if (err.response) console.error("[AI] Response:", JSON.stringify(err.response.data).substring(0, 500));
     return null;
   }
 }
 
-// === Helper: Download image and convert to base64 ===
+// === Helper: Download image as base64 ===
 async function downloadImageAsBase64(url) {
   try {
-    console.log("[AI] Downloading image for vision...");
+    console.log("[AI] Downloading image...");
     const resp = await axios.get(url, { responseType: "arraybuffer", timeout: 15000 });
     const buffer = Buffer.from(resp.data);
     const contentType = resp.headers["content-type"] || "image/jpeg";
     const base64 = `data:${contentType};base64,${buffer.toString("base64")}`;
-    console.log("[AI] Image downloaded:", Math.round(buffer.length / 1024), "KB");
+    console.log("[AI] Image:", Math.round(buffer.length / 1024), "KB");
     return base64;
   } catch (err) {
-    console.error("[AI] Image download failed:", err.message);
+    console.error("[AI] Download failed:", err.message);
     return null;
   }
 }
 
-// === Analyze Image (Gemini Vision) — FIXED with base64 ===
+// === Helper: Resize base64 if too large ===
+function checkImageSize(base64str) {
+  // base64 string length in chars (rough size estimate)
+  const sizeKB = Math.round(base64str.length / 1024);
+  console.log("[AI] Image base64 size:", sizeKB, "KB");
+  return sizeKB;
+}
+
+// === Call Vision API with retries ===
+async function callVisionAPI(imageDataUri, questionText, model) {
+  const resp = await axios.post(
+    "https://openrouter.ai/api/v1/chat/completions",
+    {
+      model: model,
+      messages: [
+        {
+          role: "user",
+          content: [
+            {
+              type: "image_url",
+              image_url: { url: imageDataUri },
+            },
+            {
+              type: "text",
+              text: questionText,
+            },
+          ],
+        },
+      ],
+      temperature: 0.5,
+      max_tokens: 2000,
+    },
+    {
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${OPENROUTER_API_KEY}`,
+      },
+      timeout: 60000,
+      maxContentLength: 50 * 1024 * 1024,
+      maxBodyLength: 50 * 1024 * 1024,
+    }
+  );
+  return resp.data;
+}
+
+// === Analyze Image (FIXED: model fallback + error logging) ===
 export async function analyzeImage(imageInput, question) {
   console.log("[AI] analyzeImage called");
 
   try {
-    // Determine the image data
+    // Get image data
     let imageDataUri;
 
     if (imageInput && imageInput.startsWith("data:")) {
-      // Already base64
       imageDataUri = imageInput;
-      console.log("[AI] Using provided base64 image");
+      console.log("[AI] Using provided base64");
     } else if (imageInput && imageInput.startsWith("http")) {
-      // URL — download and convert
-      console.log("[AI] Downloading image from URL:", imageInput.substring(0, 80));
       imageDataUri = await downloadImageAsBase64(imageInput);
     }
 
     if (!imageDataUri) {
-      console.error("[AI] No valid image data");
-      return "Tak dapat access gambar tu. Cuba hantar lagi?";
+      return "Tak dapat access gambar. Cuba hantar lagi?";
     }
 
-    const questionText = question || "Describe this image in detail. Extract any visible text (OCR). Identify all objects, products, logos, prices, colors, and mood. Be specific and useful.";
+    checkImageSize(imageDataUri);
 
-    // Call OpenRouter with multimodal vision format
-    const resp = await axios.post(
-      "https://openrouter.ai/api/v1/chat/completions",
-      {
-        model: "google/gemini-2.0-flash",
-        messages: [
-          {
-            role: "system",
-            content: "You are a visual analysis expert. Analyze images thoroughly for content creation, product review, and brand analysis. Reply in Malay/English mix. Be detailed and specific.",
-          },
-          {
-            role: "user",
-            content: [
-              {
-                type: "image_url",
-                image_url: { url: imageDataUri },
-              },
-              {
-                type: "text",
-                text: questionText,
-              },
-            ],
-          },
-        ],
-        temperature: 0.5,
-        max_tokens: 2000,
-      },
-      {
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${OPENROUTER_API_KEY}`,
-        },
-        maxContentLength: 50 * 1024 * 1024,
-        maxBodyLength: 50 * 1024 * 1024,
+    const questionText = question ||
+      "You are analyzing an image sent by a user. Describe everything you see in detail. " +
+      "Extract all visible text (OCR). Identify products, brands, prices, logos, objects, colors. " +
+      "Reply in Malay/English mix. Be specific and useful.";
+
+    // Try models in order of reliability for vision
+    const visionModels = [
+      "openai/gpt-4o-mini",
+      "google/gemini-2.0-flash",
+      "google/gemini-2.5-flash",
+    ];
+
+    for (const model of visionModels) {
+      try {
+        console.log("[AI] Trying vision model:", model);
+        const data = await callVisionAPI(imageDataUri, questionText, model);
+
+        if (data.error) {
+          console.error("[AI] Vision error with", model, ":", data.error.message || JSON.stringify(data.error));
+          continue;
+        }
+
+        const result = data.choices?.[0]?.message?.content;
+        if (result) {
+          console.log("[AI] analyzeImage SUCCESS with", model);
+          return result;
+        }
+      } catch (err) {
+        console.error("[AI] Vision failed with", model, ":", err.message);
+        if (err.response) {
+          console.error("[AI] Status:", err.response.status);
+          console.error("[AI] Error body:", JSON.stringify(err.response.data).substring(0, 500));
+        }
+        // Continue to next model
       }
-    );
-
-    const data = resp.data;
-    if (data.error) {
-      console.error("[AI] Vision error:", data.error.message || data.error);
-      return "Image analysis error: " + (data.error.message || "Unknown");
     }
 
-    const result = data.choices?.[0]?.message?.content;
-    console.log("[AI] analyzeImage: success");
-    return result || "Tak jumpa apa dalam gambar ni.";
+    return "Semua model vision gagal analyze gambar ni. Cuba hantar gambar yang lebih kecil?";
   } catch (err) {
-    console.error("[AI] analyzeImage failed:", err.message);
+    console.error("[AI] analyzeImage error:", err.message);
     return "Image analysis failed: " + err.message;
   }
 }
 
 // === Web Search (Tavily) ===
 export async function webSearch(query) {
-  if (!TAVILY_API_KEY) {
-    console.log("[AI] Tavily not configured");
-    return { error: "Tavily not configured", results: [] };
-  }
+  if (!TAVILY_API_KEY) return { error: "Tavily not configured", results: [] };
 
   try {
     console.log("[AI] webSearch:", query);
@@ -159,12 +190,9 @@ export async function webSearch(query) {
       }
     );
 
-    const data = resp.data;
-    console.log("[AI] webSearch:", data.results?.length || 0, "results");
-
     return {
-      answer: data.answer || "",
-      results: (data.results || []).map((r) => ({
+      answer: resp.data.answer || "",
+      results: (resp.data.results || []).map((r) => ({
         title: r.title,
         url: r.url,
         snippet: r.content?.substring(0, 200),
@@ -176,64 +204,54 @@ export async function webSearch(query) {
   }
 }
 
-// === Deep Research (Gemini via OpenRouter) ===
+// === Deep Research (Gemini) ===
 export async function research(prompt) {
   console.log("[AI] research:", prompt.substring(0, 80));
-
   const sys = `You are a research expert for Malaysian F&B, digital marketing, and business.
-Provide factual, data-driven analysis. Include numbers, trends, and actionable insights.
-Reply in Malay/English mix. Concise but thorough.`;
-
+Provide factual, data-driven analysis. Reply in Malay/English mix.`;
   return (await callToolLLM(sys, prompt, "google/gemini-2.0-flash")) || "Research failed.";
 }
 
-// === Write Content (Pro Copywriter) ===
+// === Write Content ===
 export async function writeContent(brief, style, platform) {
   console.log("[AI] writeContent:", platform || "general", "|", style || "casual");
 
   const styles = {
-    sakluma: "Premium Malaysian smoked meat brand. Dark, moody, premium. Mix BM/BI. Storytelling.",
-    casual: "Casual Manglish. Fun, relatable. Like a friend.",
-    corporate: "Professional, formal, structured, polished.",
-    affiliate: "Sales angle — urgency, benefits, social proof, CTA.",
+    sakluma: "Premium Malaysian smoked meat brand. Dark, moody. Mix BM/BI. Storytelling.",
+    casual: "Casual Manglish. Fun, relatable.",
+    corporate: "Professional, formal, structured.",
+    affiliate: "Sales angle — urgency, benefits, CTA.",
     manglish: "Full Manglish — very casual, very local.",
   };
 
   const platforms = {
-    instagram: "Hook first line, body 2-3 paragraphs, CTA, 15-20 hashtags.",
-    tiktok: "Very short punchy. Max 2-3 lines. Trending hashtags.",
-    facebook: "Storytelling, longer OK. Emotional, shareable. 3-5 hashtags.",
-    twitter: "Max 280 chars. Punchy, witty. 2-3 hashtags.",
-    threads: "Conversational, opinion-based. Casual tone.",
-    blog: "SEO-friendly, H2/H3 headings. Intro, body, conclusion.",
+    instagram: "Hook first line, body 2-3 para, CTA, 15-20 hashtags.",
+    tiktok: "Very short. Max 2-3 lines. Trending hashtags.",
+    facebook: "Storytelling. Emotional, shareable. 3-5 hashtags.",
+    twitter: "Max 280 chars. Punchy. 2-3 hashtags.",
+    threads: "Conversational. Casual tone.",
+    blog: "SEO, H2/H3 headings. Intro, body, conclusion.",
   };
 
-  const sys = `You are a top Malaysian content writer.\nSTYLE: ${styles[style] || styles.casual}\nPLATFORM: ${platforms[platform] || "General."}\nWrite directly, ready to copy-paste. Include hashtags if needed.`;
+  const sys = `You are a top Malaysian content writer.
+STYLE: ${styles[style] || styles.casual}
+PLATFORM: ${platforms[platform] || "General."}
+Write directly, ready to copy-paste.`;
 
   return (await callToolLLM(sys, `Write content for: ${brief}`)) || "Content writing failed.";
 }
 
-// === Quick Caption Generator ===
+// === Quick Caption ===
 export async function generateCaption(topic, platform, mood) {
-  console.log("[AI] generateCaption:", topic, "|", platform || "instagram");
+  console.log("[AI] generateCaption:", topic);
 
   const prompt = `Generate social media caption:
 Topic: ${topic}
 Platform: ${platform || "Instagram"}
-Mood: ${mood || "engaging and premium"}
+Mood: ${mood || "engaging"}
 
-Format:
-HOOK: [first line]
-CAPTION: [2-3 paragraphs]
-CTA: [call to action]
-HASHTAGS: [10-15 hashtags]
+Format: HOOK, CAPTION, CTA, HASHTAGS
+Write in Malay/English mix. Scroll-stopping.`;
 
-Write in Malay/English mix. Make it scroll-stopping.`;
-
-  return (
-    (await callToolLLM(
-      "You write viral social media captions for Malaysian brands.",
-      prompt
-    )) || "Caption failed."
-  );
+  return (await callToolLLM("You write viral captions for Malaysian brands.", prompt)) || "Caption failed.";
 }
