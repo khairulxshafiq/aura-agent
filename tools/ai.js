@@ -28,25 +28,118 @@ export async function callToolLLM(systemPrompt, userMessage, model) {
 
     const data = resp.data;
     if (data.error) {
-      console.error("[Tool] LLM error:", data.error.message || data.error);
+      console.error("[AI] LLM error:", data.error.message || data.error);
       return null;
     }
     return data.choices?.[0]?.message?.content || null;
   } catch (err) {
-    console.error("[Tool] LLM failed:", err.message);
+    console.error("[AI] LLM failed:", err.message);
     return null;
+  }
+}
+
+// === Helper: Download image and convert to base64 ===
+async function downloadImageAsBase64(url) {
+  try {
+    console.log("[AI] Downloading image for vision...");
+    const resp = await axios.get(url, { responseType: "arraybuffer", timeout: 15000 });
+    const buffer = Buffer.from(resp.data);
+    const contentType = resp.headers["content-type"] || "image/jpeg";
+    const base64 = `data:${contentType};base64,${buffer.toString("base64")}`;
+    console.log("[AI] Image downloaded:", Math.round(buffer.length / 1024), "KB");
+    return base64;
+  } catch (err) {
+    console.error("[AI] Image download failed:", err.message);
+    return null;
+  }
+}
+
+// === Analyze Image (Gemini Vision) — FIXED with base64 ===
+export async function analyzeImage(imageInput, question) {
+  console.log("[AI] analyzeImage called");
+
+  try {
+    // Determine the image data
+    let imageDataUri;
+
+    if (imageInput && imageInput.startsWith("data:")) {
+      // Already base64
+      imageDataUri = imageInput;
+      console.log("[AI] Using provided base64 image");
+    } else if (imageInput && imageInput.startsWith("http")) {
+      // URL — download and convert
+      console.log("[AI] Downloading image from URL:", imageInput.substring(0, 80));
+      imageDataUri = await downloadImageAsBase64(imageInput);
+    }
+
+    if (!imageDataUri) {
+      console.error("[AI] No valid image data");
+      return "Tak dapat access gambar tu. Cuba hantar lagi?";
+    }
+
+    const questionText = question || "Describe this image in detail. Extract any visible text (OCR). Identify all objects, products, logos, prices, colors, and mood. Be specific and useful.";
+
+    // Call OpenRouter with multimodal vision format
+    const resp = await axios.post(
+      "https://openrouter.ai/api/v1/chat/completions",
+      {
+        model: "google/gemini-2.0-flash",
+        messages: [
+          {
+            role: "system",
+            content: "You are a visual analysis expert. Analyze images thoroughly for content creation, product review, and brand analysis. Reply in Malay/English mix. Be detailed and specific.",
+          },
+          {
+            role: "user",
+            content: [
+              {
+                type: "image_url",
+                image_url: { url: imageDataUri },
+              },
+              {
+                type: "text",
+                text: questionText,
+              },
+            ],
+          },
+        ],
+        temperature: 0.5,
+        max_tokens: 2000,
+      },
+      {
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${OPENROUTER_API_KEY}`,
+        },
+        maxContentLength: 50 * 1024 * 1024,
+        maxBodyLength: 50 * 1024 * 1024,
+      }
+    );
+
+    const data = resp.data;
+    if (data.error) {
+      console.error("[AI] Vision error:", data.error.message || data.error);
+      return "Image analysis error: " + (data.error.message || "Unknown");
+    }
+
+    const result = data.choices?.[0]?.message?.content;
+    console.log("[AI] analyzeImage: success");
+    return result || "Tak jumpa apa dalam gambar ni.";
+  } catch (err) {
+    console.error("[AI] analyzeImage failed:", err.message);
+    return "Image analysis failed: " + err.message;
   }
 }
 
 // === Web Search (Tavily) ===
 export async function webSearch(query) {
   if (!TAVILY_API_KEY) {
-    console.log("[Tool] Tavily not configured");
+    console.log("[AI] Tavily not configured");
     return { error: "Tavily not configured", results: [] };
   }
 
   try {
-    console.log("[Tool] webSearch:", query);
+    console.log("[AI] webSearch:", query);
     const resp = await axios.post(
       "https://api.tavily.com/search",
       {
@@ -67,7 +160,7 @@ export async function webSearch(query) {
     );
 
     const data = resp.data;
-    console.log("[Tool] webSearch:", data.results?.length || 0, "results");
+    console.log("[AI] webSearch:", data.results?.length || 0, "results");
 
     return {
       answer: data.answer || "",
@@ -78,14 +171,14 @@ export async function webSearch(query) {
       })),
     };
   } catch (err) {
-    console.error("[Tool] webSearch failed:", err.message);
+    console.error("[AI] webSearch failed:", err.message);
     return { error: err.message, results: [] };
   }
 }
 
 // === Deep Research (Gemini via OpenRouter) ===
 export async function research(prompt) {
-  console.log("[Tool] research:", prompt.substring(0, 80));
+  console.log("[AI] research:", prompt.substring(0, 80));
 
   const sys = `You are a research expert for Malaysian F&B, digital marketing, and business.
 Provide factual, data-driven analysis. Include numbers, trends, and actionable insights.
@@ -94,35 +187,16 @@ Reply in Malay/English mix. Concise but thorough.`;
   return (await callToolLLM(sys, prompt, "google/gemini-2.0-flash")) || "Research failed.";
 }
 
-// === Analyze Image (Gemini Vision) ===
-export async function analyzeImage(imageUrl, question) {
-  console.log("[Tool] analyzeImage:", imageUrl?.substring(0, 60));
-
-  const prompt = `Analyze this image: ${imageUrl}
-
-${question || "Describe what you see. Extract text. Identify objects, colors, mood, quality."}
-
-Reply in Malay/English mix. Be specific and useful.`;
-
-  return (
-    (await callToolLLM(
-      "You are a visual analysis expert for content creation and brand review.",
-      prompt,
-      "google/gemini-2.0-flash"
-    )) || "Image analysis failed."
-  );
-}
-
 // === Write Content (Pro Copywriter) ===
 export async function writeContent(brief, style, platform) {
-  console.log("[Tool] writeContent:", platform || "general", "|", style || "casual");
+  console.log("[AI] writeContent:", platform || "general", "|", style || "casual");
 
   const styles = {
-    sakluma: "Write for Sakluma Original — premium Malaysian smoked meat. Dark, moody, premium. Mix BM/BI. Storytelling.",
-    casual: "Write casually — Manglish, fun, relatable. Like a friend.",
-    corporate: "Write professionally — formal, structured, polished.",
-    affiliate: "Write with sales angle — urgency, benefits, social proof, CTA.",
-    manglish: "Full Manglish — Malaysian English/Malay mix. Very casual, very local.",
+    sakluma: "Premium Malaysian smoked meat brand. Dark, moody, premium. Mix BM/BI. Storytelling.",
+    casual: "Casual Manglish. Fun, relatable. Like a friend.",
+    corporate: "Professional, formal, structured, polished.",
+    affiliate: "Sales angle — urgency, benefits, social proof, CTA.",
+    manglish: "Full Manglish — very casual, very local.",
   };
 
   const platforms = {
@@ -134,19 +208,14 @@ export async function writeContent(brief, style, platform) {
     blog: "SEO-friendly, H2/H3 headings. Intro, body, conclusion.",
   };
 
-  const sys = `You are a top Malaysian content writer.
-
-STYLE: ${styles[style] || styles.casual}
-PLATFORM: ${platforms[platform] || "General."}
-
-Write directly, ready to copy-paste. Include hashtags if needed.`;
+  const sys = `You are a top Malaysian content writer.\nSTYLE: ${styles[style] || styles.casual}\nPLATFORM: ${platforms[platform] || "General."}\nWrite directly, ready to copy-paste. Include hashtags if needed.`;
 
   return (await callToolLLM(sys, `Write content for: ${brief}`)) || "Content writing failed.";
 }
 
 // === Quick Caption Generator ===
 export async function generateCaption(topic, platform, mood) {
-  console.log("[Tool] generateCaption:", topic, "|", platform || "instagram");
+  console.log("[AI] generateCaption:", topic, "|", platform || "instagram");
 
   const prompt = `Generate social media caption:
 Topic: ${topic}
