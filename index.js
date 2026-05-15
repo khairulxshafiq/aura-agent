@@ -3,7 +3,12 @@ import dotenv from "dotenv";
 dotenv.config();
 
 import { runOrchestrator } from "./orchestrator.js";
-import { sendTelegram, sendTelegramImage, sendTelegramTyping, getTelegramFile } from "./tools/telegram.js";
+import {
+  sendTelegram,
+  sendTelegramImage,
+  sendTelegramTyping,
+  downloadTelegramFile,
+} from "./tools/telegram.js";
 import { TOOLS, TOOL_DESCRIPTIONS } from "./tools/index.js";
 
 const app = express();
@@ -15,8 +20,8 @@ const TELEGRAM_API = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}`;
 // === Health ===
 app.get("/", (req, res) => {
   res.json({
-    status: "AURA v3.2 — Full Agentic (No n8n needed)",
-    version: "3.2.0",
+    status: "AURA v3.2.1 — Full Agentic (Vision Fixed)",
+    version: "3.2.1",
     agents: ["content", "finance", "sales", "marketing", "training", "ops", "architect"],
     tools: Object.keys(TOOL_DESCRIPTIONS),
     timestamp: new Date().toISOString(),
@@ -32,49 +37,68 @@ app.post("/telegram", async (req, res) => {
     const chatId = message.chat.id;
     const userName = message.from?.first_name || "User";
 
-    // === Photo messages ===
+    // === PHOTO MESSAGES ===
     if (message.photo) {
       const fileId = message.photo[message.photo.length - 1].file_id;
-      const caption = message.caption || "Analyze this image";
+      const caption = message.caption || "Analyze this image in detail";
 
       console.log("\n=== PHOTO ===");
       console.log("From:", userName, "| Caption:", caption);
 
       await sendTelegram("AURA tengah analyze gambar... 👁️", { chatId });
 
-      const fileUrl = await getTelegramFile(fileId);
-      if (fileUrl) {
-        const result = await runOrchestrator(`Analyze image: ${caption}. Image URL: ${fileUrl}`, {
-          source: "telegram", userName, chatId, imageUrl: fileUrl,
-        });
-        const text = typeof result === "string" ? result : result?.response || result?.result || JSON.stringify(result);
+      // Download image as base64 (Gemini can't access Telegram URLs directly)
+      const { url, base64 } = await downloadTelegramFile(fileId);
+
+      if (base64) {
+        console.log("[Photo] Image downloaded, sending to AI vision...");
+
+        const result = await runOrchestrator(
+          `Analyze this image. User says: "${caption}". The image has been provided as base64 data.`,
+          {
+            source: "telegram",
+            userName,
+            chatId,
+            imageBase64: base64,
+            imageUrl: url,
+          }
+        );
+
+        const text = typeof result === "string"
+          ? result
+          : result?.response || result?.result || JSON.stringify(result);
         await sendTelegram(text, { chatId });
       } else {
-        await sendTelegram("Tak dapat access gambar. Hantar lagi?", { chatId });
+        await sendTelegram("Tak dapat download gambar tu. Cuba hantar lagi? 🙏", { chatId });
       }
       return res.sendStatus(200);
     }
 
-    // === Text messages ===
+    // === TEXT MESSAGES ===
     if (!message.text) return res.sendStatus(200);
     const userText = message.text;
 
     console.log("\n=== TELEGRAM ===");
     console.log("From:", userName, "| Text:", userText);
 
+    await sendTelegramTyping(chatId);
     await sendTelegram("AURA sedang fikir...", { chatId });
 
-    const result = await runOrchestrator(userText, { source: "telegram", userName, chatId });
-    const responseText = typeof result === "string" ? result : result?.response || result?.result || JSON.stringify(result);
+    const result = await runOrchestrator(userText, {
+      source: "telegram",
+      userName,
+      chatId,
+    });
 
-    // If result contains image URL, send as photo
-    if (responseText.includes("replicate.delivery") || responseText.includes(".webp") || responseText.includes(".png")) {
-      const urlMatch = responseText.match(/(https:\/\/[^\s]+\.(webp|png|jpg))/);
-      if (urlMatch) {
-        await sendTelegramImage(urlMatch[0], responseText.replace(urlMatch[0], "").trim(), { chatId });
-      } else {
-        await sendTelegram(responseText, { chatId });
-      }
+    const responseText = typeof result === "string"
+      ? result
+      : result?.response || result?.result || JSON.stringify(result);
+
+    // Auto-detect image URLs in response and send as photo
+    const imgMatch = responseText.match(/(https:\/\/[^\s]+(replicate\.delivery|webp|png|jpg)[^\s]*)/i);
+    if (imgMatch) {
+      const cleanText = responseText.replace(imgMatch[0], "").trim();
+      await sendTelegramImage(imgMatch[0], cleanText.substring(0, 200), { chatId });
     } else {
       await sendTelegram(responseText, { chatId });
     }
@@ -84,7 +108,7 @@ app.post("/telegram", async (req, res) => {
   } catch (err) {
     console.error("Webhook error:", err.message);
     const chatId = req.body?.message?.chat?.id;
-    if (chatId) await sendTelegram("Alamak ada glitch. Cuba lagi!", { chatId });
+    if (chatId) await sendTelegram("Alamak ada glitch. Cuba lagi! 🙏", { chatId });
     res.sendStatus(200);
   }
 });
@@ -116,7 +140,7 @@ app.post("/tool/:toolName", async (req, res) => {
 // === Info ===
 app.get("/agents", (req, res) => {
   res.json({
-    boss: "AURA v3.2",
+    boss: "AURA v3.2.1",
     agents: [
       { name: "content", role: "Chat, copywriting, captions, visuals (DEFAULT)" },
       { name: "finance", role: "Pricing, costs, ROI" },
@@ -136,7 +160,7 @@ app.get("/tools", (req, res) => res.json({ tools: TOOL_DESCRIPTIONS }));
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, async () => {
   console.log("===================================");
-  console.log("AURA v3.2 — Full Agentic System");
+  console.log("AURA v3.2.1 — Vision Fixed");
   console.log("Port:", PORT);
   console.log("LLM:", process.env.OPENROUTER_MODEL || "not set");
   console.log("Tools:", Object.keys(TOOL_DESCRIPTIONS).join(", "));
