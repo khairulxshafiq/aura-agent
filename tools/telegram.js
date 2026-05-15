@@ -6,7 +6,7 @@ const API = `https://api.telegram.org/bot${TOKEN}`;
 
 export async function sendTelegram(message, options = {}) {
   try {
-    const { chatId = CHAT_ID, parseMode } = options;
+    const { chatId = CHAT_ID } = options;
     const MAX = 4000;
     const chunks = [];
     let remaining = message || "";
@@ -22,7 +22,6 @@ export async function sendTelegram(message, options = {}) {
           text: chunk,
         });
       } catch (err) {
-        // Fallback: send without parse_mode
         await axios.post(`${API}/sendMessage`, {
           chat_id: chatId,
           text: chunk.substring(0, 500) + "\n\n[mesej dipendekkan]",
@@ -43,7 +42,7 @@ export async function sendTelegramImage(imageUrl, caption = "", options = {}) {
     await axios.post(`${API}/sendPhoto`, {
       chat_id: chatId,
       photo: imageUrl,
-      caption: caption,
+      caption: caption.substring(0, 1024),
     });
     console.log("Telegram image sent");
     return { sent: true };
@@ -60,7 +59,7 @@ export async function sendTelegramTyping(chatId) {
       action: "typing",
     });
   } catch (err) {
-    // Silent fail - typing indicator is not critical
+    // Silent fail
   }
 }
 
@@ -74,5 +73,46 @@ export async function getTelegramFile(fileId) {
   } catch (err) {
     console.error("Telegram getFile error:", err.message);
     return null;
+  }
+}
+
+// NEW: Download file and convert to base64 for AI vision
+export async function downloadTelegramFile(fileId) {
+  try {
+    // Step 1: Get file path from Telegram
+    const fileResp = await axios.get(`${API}/getFile?file_id=${fileId}`);
+    if (!fileResp.data.ok) {
+      console.error("getTelegramFile failed:", fileResp.data);
+      return { url: null, base64: null };
+    }
+
+    const filePath = fileResp.data.result.file_path;
+    const fileUrl = `https://api.telegram.org/file/bot${TOKEN}/${filePath}`;
+
+    // Step 2: Download the actual image bytes
+    console.log("[Telegram] Downloading image:", filePath);
+    const imgResp = await axios.get(fileUrl, { responseType: "arraybuffer" });
+    const buffer = Buffer.from(imgResp.data);
+
+    // Step 3: Detect mime type from extension
+    const ext = filePath.split(".").pop().toLowerCase();
+    const mimeMap = {
+      jpg: "image/jpeg",
+      jpeg: "image/jpeg",
+      png: "image/png",
+      gif: "image/gif",
+      webp: "image/webp",
+      bmp: "image/bmp",
+    };
+    const mime = mimeMap[ext] || "image/jpeg";
+
+    // Step 4: Convert to base64 data URI
+    const base64 = `data:${mime};base64,${buffer.toString("base64")}`;
+    console.log("[Telegram] Image downloaded:", Math.round(buffer.length / 1024), "KB");
+
+    return { url: fileUrl, base64 };
+  } catch (err) {
+    console.error("[Telegram] downloadFile failed:", err.message);
+    return { url: null, base64: null };
   }
 }
