@@ -18,10 +18,6 @@ import {
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
 const OPENROUTER_MODEL = process.env.OPENROUTER_MODEL || "openai/gpt-4o-mini";
 
-// ============================================================
-// BOSS SYSTEM PROMPT v3.2
-// ============================================================
-
 const BOSS_SYSTEM_PROMPT = `You are AURA — Matrol's personal AI assistant with real tools.
 
 ## IDENTITY
@@ -36,41 +32,39 @@ const BOSS_SYSTEM_PROMPT = `You are AURA — Matrol's personal AI assistant with
 - webSearch: search internet (Tavily)
 - research: deep AI analysis (Gemini)
 - generateImage: create AI images (Replicate Flux)
-- analyzeImage: analyze/read images (Gemini Vision)
+- analyzeImage: analyze/read images with AI vision (send base64 to Gemini)
 - writeContent: write articles, copies, scripts
 - generateCaption: quick social media captions
 
 ## PLANNING
-1. CASUAL (hi, hello, thanks) -> 1 step, content agent, action: "casual reply", NO tools
-2. CONTENT (caption, article) -> content agent, action: "use generateCaption for [topic]" or "use writeContent for [topic]"
-3. IMAGE (buat gambar) -> content agent, action: "use generateImage: [description]"
-4. RESEARCH (cari info) -> ops agent, action: "use webSearch for [query]"
-5. BUSINESS -> relevant agent + tools, max 4 steps
+1. CASUAL (hi, hello, thanks) -> 1 step, content agent, "casual reply", NO tools
+2. CONTENT (caption, article) -> content agent, "use generateCaption" or "use writeContent"
+3. IMAGE GEN (buat gambar) -> content agent, "use generateImage: [description]"
+4. IMAGE ANALYSIS (analyze gambar, faham gambar, apa gambar ni) -> content agent, "use analyzeImage"
+5. RESEARCH (cari info) -> ops agent, "use webSearch for [query]"
+6. BUSINESS -> relevant agent + tools, max 4 steps
 
-## OUTPUT FORMAT
-Return ONLY valid JSON array:
-[{"step":1,"agent":"content","action":"casual reply to: hi","params":{},"description":"why","depends_on":null}]
+## OUTPUT: Return ONLY valid JSON array
+[{"step":1,"agent":"content","action":"use analyzeImage","params":{},"description":"why","depends_on":null}]
 
-## RULES
+## CRITICAL
 - Include "use [toolName]" in action when tool needed
+- Image analysis = "use analyzeImage" (image data is auto-provided)
 - Casual = NO tools. Complex = max 4 steps.
 - NEVER over-orchestrate`;
 
 const AGENT_ROLES = {
   content: `You are AURA's Content agent.
 CASUAL CHAT: Reply like a friend. Short, warm. NEVER mention business unless asked.
-CONTENT: Write engaging content. Your tools: writeContent, generateCaption, generateImage.
-Keep it natural and human.`,
-
-  finance: "AURA Finance agent. Pricing, costs, ROI, budgets. MYR currency. Casual Malay/English.",
+CONTENT: Write engaging content. Your tools: writeContent, generateCaption, generateImage, analyzeImage.`,
+  finance: "AURA Finance agent. Pricing, costs, ROI, budgets. Casual Malay/English.",
   sales: "AURA Sales agent. Quotations, customer replies, CRM. Casual Malay/English.",
-  marketing: "AURA Marketing agent. Campaigns, ads, market analysis. Tools: webSearch, research. Casual Malay/English.",
-  training: "AURA Training agent. SOPs, modules, quizzes. Tool: writeContent. Casual Malay/English.",
-  ops: "AURA Ops agent. Scheduling, logistics, status. Tool: webSearch. Casual Malay/English.",
-  architect: "AURA Architect agent. Tech, debugging, APIs. Tool: research. Casual Malay/English.",
+  marketing: "AURA Marketing agent. Campaigns, ads, market analysis. Casual Malay/English.",
+  training: "AURA Training agent. SOPs, modules, quizzes. Casual Malay/English.",
+  ops: "AURA Ops agent. Scheduling, logistics, status. Casual Malay/English.",
+  architect: "AURA Architect agent. Tech, debugging, APIs. Casual Malay/English.",
 };
 
-// === Internal LLM ===
 async function callLLM(systemPrompt, userMessage) {
   try {
     const resp = await axios.post(
@@ -95,7 +89,6 @@ async function callLLM(systemPrompt, userMessage) {
   }
 }
 
-// === Casual Detector ===
 function isCasualMessage(text) {
   const casual = [
     "hi","hello","hey","yo","sup","helo","hai","ok","okay","k","noted","okey",
@@ -113,9 +106,18 @@ function isCasualMessage(text) {
   return false;
 }
 
-// === Tool Execution Engine ===
+// === TOOL EXECUTION ENGINE (FIXED: image analysis uses context.imageBase64) ===
 async function executeWithTools(agentName, action, params, context) {
   const a = action.toLowerCase();
+
+  // IMAGE ANALYSIS — use base64 from context if available
+  if (a.includes("use analyzeimage") || a.includes("analyze image") || a.includes("analisis gambar") || a.includes("analyze this image")) {
+    console.log(`[Engine] ${agentName} -> analyzeImage`);
+    // Priority: context.imageBase64 > params.imageUrl > params.url
+    const imageInput = context?.imageBase64 || params.imageUrl || params.url || "";
+    const question = params.question || context?.originalTask || "Analyze this image in detail.";
+    return await analyzeImage(imageInput, question);
+  }
 
   if (a.includes("use websearch") || a.includes("search internet") || a.includes("cari info")) {
     const q = params.query || params.topic || context?.originalTask || action;
@@ -137,28 +139,22 @@ async function executeWithTools(agentName, action, params, context) {
     return "Gambar tak berjaya. Cuba lagi?";
   }
 
-  if (a.includes("use analyzeimage") || a.includes("analyze image") || a.includes("analisis gambar")) {
-    console.log(`[Engine] ${agentName} -> analyzeImage`);
-    return await analyzeImage(params.imageUrl || params.url || "", params.question || "");
-  }
-
-  if (a.includes("use writecontent") || a.includes("tulis artikel") || a.includes("write article") || a.includes("buat content")) {
+  if (a.includes("use writecontent") || a.includes("tulis artikel") || a.includes("buat content")) {
     console.log(`[Engine] ${agentName} -> writeContent`);
     return await writeContent(params.brief || context?.originalTask || action, params.style || "casual", params.platform || "general");
   }
 
-  if (a.includes("use generatecaption") || a.includes("buat caption") || a.includes("caption ig") || a.includes("caption instagram")) {
+  if (a.includes("use generatecaption") || a.includes("buat caption") || a.includes("caption ig")) {
     console.log(`[Engine] ${agentName} -> generateCaption`);
     return await generateCaption(params.topic || context?.originalTask || action, params.platform || "instagram", params.mood || "engaging");
   }
 
-  // No tool match -> LLM
+  // No tool -> LLM
   console.log(`[Engine] ${agentName} -> LLM`);
   const role = AGENT_ROLES[agentName] || "Helpful assistant. Casual Malay/English.";
   return await callLLM(role, `TASK: ${action}\n${context?.originalTask ? "Original: " + context.originalTask : ""}\nReply casual, concise.`);
 }
 
-// === Planning ===
 async function planTask(understanding, memories, task) {
   if (isCasualMessage(task)) {
     console.log("Fast path: casual");
@@ -168,7 +164,7 @@ async function planTask(understanding, memories, task) {
   const mem = memories.length > 0 ? "\nMEMORIES:\n" + memories.slice(0, 3).map((m) => `- ${m.task}`).join("\n") : "";
 
   const planResponse = await callLLM(BOSS_SYSTEM_PROMPT,
-    `Plan for this. Return ONLY JSON array.\nREQUEST: ${task}\nUNDERSTANDING: ${understanding}${mem}\nIf tool needed, include "use [toolName]" in action. Casual=1 step. Complex=max 4.`
+    `Plan for this. Return ONLY JSON array.\nREQUEST: ${task}\nUNDERSTANDING: ${understanding}${mem}\nIf tool needed, include "use [toolName]" in action.`
   );
 
   try {
@@ -189,20 +185,15 @@ async function bossApprove(step) {
 
 async function bossReview(task, results) {
   const txt = results.map((r) => `[${r.agent}]: ${r.result}`).join("\n\n");
-  return await callLLM(BOSS_SYSTEM_PROMPT, `Final response for Matrol.\nOriginal: ${task}\n\nResults:\n${txt}\n\nWrite like a friend. NEVER mention agents. Casual.`);
+  return await callLLM(BOSS_SYSTEM_PROMPT, `Final response for Matrol.\nOriginal: ${task}\n\nResults:\n${txt}\nWrite like a friend. Casual.`);
 }
-
-// ============================================================
-// MAIN ORCHESTRATOR v3.2
-// ============================================================
 
 export async function runOrchestrator(task, context = {}) {
   const start = Date.now();
-  console.log("\nAURA v3.2 START");
+  console.log("\nAURA v3.2.1 START");
   console.log("Task:", task);
   console.log("");
 
-  // Step 1
   console.log("Step 1: Understanding...");
   let understanding;
   if (isCasualMessage(task)) {
@@ -214,18 +205,15 @@ export async function runOrchestrator(task, context = {}) {
   }
   console.log("->", understanding);
 
-  // Step 2
   console.log("\nStep 2: Memory...");
   const memories = await searchMemory(task);
   console.log(`-> ${memories.length} memories`);
 
-  // Step 3
   console.log("\nStep 3: Planning...");
   const plan = await planTask(understanding, memories, task);
   const agents = [...new Set(plan.map((s) => s.agent))];
   console.log(`-> ${plan.length} step(s), agents: ${agents.join(", ")}`);
 
-  // Step 4
   console.log("\nStep 4: Executing...");
   const results = [];
 
@@ -245,20 +233,18 @@ export async function runOrchestrator(task, context = {}) {
 
   console.log(`\nExecuted: ${results.length}/${plan.length}`);
 
-  // Step 5
   console.log("\nStep 5: Review...");
   let finalResponse;
-  if (results.length === 0) finalResponse = "Eh, tak dapat proses. Cuba explain lagi?";
+  if (results.length === 0) finalResponse = "Tak dapat proses. Cuba explain lagi?";
   else if (results.length === 1) finalResponse = results[0].result;
   else finalResponse = await bossReview(task, results);
 
-  // Step 6
   console.log("Step 6: Memory...");
   await saveMemory(task, finalResponse);
   await logActivity("orchestrator", task, finalResponse, "success");
 
   const duration = Date.now() - start;
-  console.log(`\nAURA v3.2 COMPLETE — ${duration}ms`);
+  console.log(`\nAURA v3.2.1 COMPLETE — ${duration}ms`);
 
   return { response: finalResponse, result: finalResponse, duration, stepsExecuted: results.length, totalSteps: plan.length, agents };
 }
