@@ -17,11 +17,37 @@ app.use(express.json());
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const TELEGRAM_API = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}`;
 
+// === Helper: Check if bot is mentioned ===
+function isBotMentioned(text, message) {
+  if (!text) return false;
+  const lower = text.toLowerCase();
+  // Mentioned by @username or by name "aura"
+  if (lower.includes("@auraagentic")) return true;
+  if (lower.includes("aura")) return true;
+  // Reply to bot's message
+  if (message?.reply_to_message?.from?.is_bot) return true;
+  return false;
+}
+
+// === Helper: Strip bot mention from text ===
+function stripBotMention(text) {
+  if (!text) return text;
+  return text
+    .replace(/@auraagentic/gi, "")
+    .replace(/^aura[,:]?\s*/i, "")
+    .trim();
+}
+
+// === Helper: Check if group chat ===
+function isGroupChat(message) {
+  return message.chat.type === "group" || message.chat.type === "supergroup";
+}
+
 // === Health ===
 app.get("/", (req, res) => {
   res.json({
-    status: "AURA v3.2.1 — Full Agentic",
-    version: "3.2.1",
+    status: "AURA v3.2.2 — Full Agentic + Group Support",
+    version: "3.2.2",
     agents: ["content", "finance", "sales", "marketing", "training", "ops", "architect"],
     tools: Object.keys(TOOL_DESCRIPTIONS),
   });
@@ -35,20 +61,26 @@ app.post("/telegram", async (req, res) => {
 
     const chatId = message.chat.id;
     const userName = message.from?.first_name || "User";
+    const isGroup = isGroupChat(message);
 
     // === PHOTO MESSAGES ===
     if (message.photo) {
-      // USE MEDIUM SIZE — not the largest! Largest can be 5MB+ which causes 400 errors
-      // Telegram photo array: [tiny, small, medium, large, xlarge]
-      // Pick index 2 (medium ~300-800KB) or last if fewer sizes available
+      const caption = message.caption || "";
+
+      // GROUP: only respond if bot mentioned in caption or reply to bot
+      if (isGroup && !isBotMentioned(caption, message)) {
+        console.log("[Group] Silent photo read from:", userName);
+        return res.sendStatus(200);
+      }
+
       const photoIndex = Math.min(2, message.photo.length - 1);
       const fileId = message.photo[photoIndex].file_id;
-      const caption = message.caption || "Analyze this image in detail";
+      const cleanCaption = stripBotMention(caption) || "Analyze this image in detail";
 
       console.log("\n=== PHOTO ===");
-      console.log("From:", userName);
-      console.log("Caption:", caption);
-      console.log("Photo sizes available:", message.photo.length, "| Using index:", photoIndex);
+      console.log("From:", userName, isGroup ? "| Group:" + message.chat.title : "| DM");
+      console.log("Caption:", cleanCaption);
+      console.log("Photo sizes:", message.photo.length, "| Using index:", photoIndex);
 
       await sendTelegram("AURA tengah analyze gambar... \uD83D\uDC41\uFE0F", { chatId });
 
@@ -58,13 +90,14 @@ app.post("/telegram", async (req, res) => {
         console.log("[Photo] Downloaded, sending to vision AI...");
 
         const result = await runOrchestrator(
-          `Analyze this image. User says: "${caption}". Image provided as base64.`,
+          `Analyze this image. User says: "${cleanCaption}". Image provided as base64.`,
           {
             source: "telegram",
             userName,
             chatId,
             imageBase64: base64,
             imageUrl: url,
+            isGroup,
           }
         );
 
@@ -80,15 +113,32 @@ app.post("/telegram", async (req, res) => {
 
     // === TEXT MESSAGES ===
     if (!message.text) return res.sendStatus(200);
-    const userText = message.text;
+    const rawText = message.text;
+
+    // GROUP: only respond if bot mentioned
+    if (isGroup && !isBotMentioned(rawText, message)) {
+      console.log("[Group] Silent read from", userName + ":", rawText.substring(0, 50));
+      return res.sendStatus(200);
+    }
+
+    // Strip bot mention from text before processing
+    const userText = isGroup ? stripBotMention(rawText) : rawText;
 
     console.log("\n=== TELEGRAM ===");
-    console.log("From:", userName, "| Text:", userText);
+    console.log("From:", userName, isGroup ? "| Group:" + message.chat.title : "| DM");
+    console.log("Text:", userText);
 
     await sendTelegramTyping(chatId);
     await sendTelegram("AURA sedang fikir...", { chatId });
 
-    const result = await runOrchestrator(userText, { source: "telegram", userName, chatId });
+    const result = await runOrchestrator(userText, {
+      source: "telegram",
+      userName,
+      chatId,
+      isGroup,
+      groupName: message.chat.title || "",
+    });
+
     const responseText = typeof result === "string"
       ? result
       : result?.response || result?.result || JSON.stringify(result);
@@ -139,7 +189,7 @@ app.post("/tool/:toolName", async (req, res) => {
 // === Info ===
 app.get("/agents", (req, res) => {
   res.json({
-    boss: "AURA v3.2.1",
+    boss: "AURA v3.2.2",
     agents: [
       { name: "content", role: "Chat, copywriting, captions (DEFAULT)" },
       { name: "finance", role: "Pricing, costs, ROI" },
@@ -159,7 +209,7 @@ app.get("/tools", (req, res) => res.json({ tools: TOOL_DESCRIPTIONS }));
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, async () => {
   console.log("===================================");
-  console.log("AURA v3.2.1");
+  console.log("AURA v3.2.2 — Group Support");
   console.log("Port:", PORT);
   console.log("LLM:", process.env.OPENROUTER_MODEL || "not set");
   console.log("===================================");
