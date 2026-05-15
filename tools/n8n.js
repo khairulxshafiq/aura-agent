@@ -6,15 +6,15 @@ export async function triggerN8n(data, options = {}) {
   try {
     const { webhookPath = "" } = options;
     const url = webhookPath ? `${N8N_URL}/${webhookPath}` : N8N_URL;
-    console.log("Triggering n8n:", url);
+    console.log("[Tool] triggerN8n:", url);
     const response = await axios.post(url, data, {
       headers: { "Content-Type": "application/json" },
-      timeout: 30000
+      timeout: 30000,
     });
-    console.log("n8n triggered");
+    console.log("[Tool] n8n triggered");
     return { triggered: true, data: response.data };
   } catch (err) {
-    console.error("n8n error:", err.message);
+    console.error("[Tool] n8n error:", err.message);
     return { triggered: false, error: err.message };
   }
 }
