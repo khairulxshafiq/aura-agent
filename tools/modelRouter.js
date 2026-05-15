@@ -1,58 +1,56 @@
-// tools/modelRouter.js
+// tools/modelRouter.js — AURA Dynamic Model Selection
 
 export function chooseModel(task = "") {
 
   const lower = task.toLowerCase();
 
-  // CODING
-  if (
-    lower.includes("code") ||
-    lower.includes("bug") ||
-    lower.includes("error") ||
+  //error") ||  // CODING / DEBUG
     lower.includes("logs") ||
-    lower.includes("debug")
+    lower.includes("debug") ||
+    lower.includes("fix") ||
+    lower.includes("api") ||
+    lower.includes("deploy")
   ) {
-
     return {
-      provider: "openrouter",
       model: "deepseek/deepseek-chat-v3-0324",
-      reason: "Cheap and powerful for coding/debugging"
+      reason: "Cheap + powerful for coding/debugging",
     };
   }
 
-  // CREATIVE
+  // RESEARCH / ANALYSIS
+  if (
+    lower.includes("research") ||
+    lower.includes("analyze") ||
+    lower.includes("trend") ||
+    lower.includes("report")
+  ) {
+    return {
+      model: "google/gemini-2.0-flash-001",
+      reason: "Strong reasoning, fast, cheap",
+    };
+  }
+
+  // CREATIVE / CONTENT
   if (
     lower.includes("caption") ||
     lower.includes("creative") ||
     lower.includes("marketing") ||
-    lower.includes("campaign")
+    lower.includes("campaign") ||
+    lower.includes("content") ||
+    lower.includes("copywriting")
   ) {
-
     return {
-      provider: "openrouter",
       model: "google/gemini-2.0-flash-001",
-      reason: "Creative + cheap"
+      reason: "Creative + cheap",
     };
   }
 
-  // RESEARCH
-  if (
-    lower.includes("research") ||
-    lower.includes("analyze") ||
-    lower.includes("trend")
-  ) {
-
-    return {
-      provider: "openrouter",
-      model: "anthropic/claude-3.5-sonnet",
-      reason: "Strong reasoning and analysis"
-    };
-  }
-
-  // DEFAULT
+  // DEFAULT — fast and cheap
   return {
-    provider: "openrouter",
     model: "google/gemini-2.0-flash-001",
-    reason: "Fast cheap fallback"
+    reason: "Fast cheap fallback",
   };
 }
+  if (
+    lower.includes("code") ||
+    lower.includes("bug") ||
