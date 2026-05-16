@@ -1,8 +1,22 @@
+// ============================================================
+// AURA v4.1 — Orchestrator (The Brain)
+// File: orchestrator.js (root)
+// MERGED: v4.0 architecture + v4.1 features
+// ============================================================
+
 import dotenv from "dotenv";
 dotenv.config();
 
 import axios from "axios";
-import { chooseModel } from "./tools/modelRouter.js";
+import { chooseModel, MODELS, TASK_MODEL_MAP, COST_LIMITS } from "./tools/modelRouter.js";
+import {
+  chatCompletion,
+  firecrawlSearch,
+  openRouterAnalyzeImage,
+  getCostReport,
+  shouldUseFreeModel,
+  getUsageStats
+} from "./tools/openRouter.js";
 import {
   webSearch,
   research,
@@ -18,18 +32,22 @@ import {
 
 var OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
 
-// PLANNING PROMPT (JSON output allowed)
+// ============================================================
+// BOSS PLAN PROMPT (updated with new tools)
+// ============================================================
+
 var BOSS_PLAN_PROMPT = "You are AURA - Matrol personal AI assistant.\n\n" +
   "IDENTITY:\n" +
   "- Smart reliable friend, NOT salesperson, NOT corporate bot\n" +
   "- NEVER promote Sakluma unless asked\n\n" +
   "AVAILABLE TOOLS:\n" +
-  "- webSearch: search internet (Tavily)\n" +
+  "- webSearch: search internet (Firecrawl + Tavily)\n" +
   "- research: deep AI analysis\n" +
   "- generateImage: create AI images\n" +
   "- analyzeImage: analyze/read images with AI vision\n" +
   "- writeContent: write articles, copies, scripts\n" +
-  "- generateCaption: quick social media captions\n\n" +
+  "- generateCaption: quick social media captions\n" +
+  "- contentPipeline: scrape URL and regenerate for FB/Threads/X\n\n" +
   "PLANNING RULES:\n" +
   "1. CASUAL (hi, hello, thanks) -> 1 step, content agent, casual reply, NO tools\n" +
   "2. CONTENT (caption, article) -> content agent, use generateCaption or use writeContent\n" +
@@ -37,7 +55,9 @@ var BOSS_PLAN_PROMPT = "You are AURA - Matrol personal AI assistant.\n\n" +
   "4. IMAGE ANALYSIS (analyze gambar) -> content agent, use analyzeImage\n" +
   "5. RESEARCH (cari info, trends) -> ops agent, use webSearch for [query]\n" +
   "6. CODING (error, bug, debug, API, code) -> coding agent, direct response\n" +
-  "7. BUSINESS -> relevant agent + tools, max 4 steps\n\n" +
+  "7. BUSINESS -> relevant agent + tools, max 4 steps\n" +
+  "8. REPORT (/report, /usage, /cost) -> direct report, NO planning needed\n" +
+  "9. PIPELINE (/pipeline URL) -> content agent, use contentPipeline\n\n" +
   "OUTPUT: Return ONLY valid JSON array\n" +
   '[{"step":1,"agent":"content","action":"casual reply","params":{},"description":"why","depends_on":null}]\n\n' +
   "CRITICAL:\n" +
@@ -45,8 +65,11 @@ var BOSS_PLAN_PROMPT = "You are AURA - Matrol personal AI assistant.\n\n" +
   "- Casual = NO tools. Complex = max 4 steps.\n" +
   "- NEVER over-orchestrate";
 
+// ============================================================
 // CHAT PROMPT (Human reply, NEVER JSON)
-var BOSS_CHAT_PROMPT = "You are AURA CORE v4 - Matrol personal AI operating system.\n\n" +
+// ============================================================
+
+var BOSS_CHAT_PROMPT = "You are AURA CORE v4.1 - Matrol personal AI operating system.\n\n" +
   "PERSONALITY:\n" +
   "- Smart, calm, helpful, efficient, human-like\n" +
   "- Casual Malay/English (Manglish)\n" +
@@ -63,7 +86,10 @@ var BOSS_CHAT_PROMPT = "You are AURA CORE v4 - Matrol personal AI operating syst
   "- Short for simple, detailed when needed\n" +
   "- Natural emoji usage";
 
-// AGENT ROLES
+// ============================================================
+// AGENT ROLES (kept from v4.0)
+// ============================================================
+
 var AGENT_ROLES = {
   content: "You are AURA Content agent. Reply in casual Malay/English. " +
     "CASUAL CHAT: Reply like a friend. Short, warm. NEVER mention business unless asked. " +
@@ -78,7 +104,56 @@ var AGENT_ROLES = {
     "Analyze carefully, identify root cause, propose production-ready fix. Casual Malay/English. NEVER return JSON. Default language: Malay."
 };
 
-// DYNAMIC MODEL ROUTING LLM
+// ============================================================
+// TASK TYPE DETECTION (NEW v4.1)
+// ============================================================
+
+export function detectTaskType(message) {
+  var msg = message.toLowerCase();
+
+  var imageKw = ["generate image", "create image", "buat gambar", "generate gambar", "draw", "lukis", "poster", "/image", "/img"];
+  for (var i = 0; i < imageKw.length; i++) { if (msg.indexOf(imageKw[i]) > -1) return "image"; }
+
+  var reportKw = ["/report", "/usage", "/cost", "/stats", "bagi report", "usage report", "cost report", "berapa guna"];
+  for (var i = 0; i < reportKw.length; i++) { if (msg.indexOf(reportKw[i]) > -1) return "report"; }
+
+  var pipelineKw = ["/pipeline", "content pipeline", "scrape and rewrite", "ambil dari url"];
+  for (var i = 0; i < pipelineKw.length; i++) { if (msg.indexOf(pipelineKw[i]) > -1) return "content_pipeline"; }
+
+  var researchKw = ["search", "cari", "research", "find out", "trend", "berita", "news", "cari info", "/search", "/research", "scrape"];
+  for (var i = 0; i < researchKw.length; i++) { if (msg.indexOf(researchKw[i]) > -1) return "research"; }
+
+  var codingKw = ["code", "coding", "debug", "fix bug", "error", "bug", "deploy", "javascript", "python", "node", "/code"];
+  for (var i = 0; i < codingKw.length; i++) { if (msg.indexOf(codingKw[i]) > -1) return "coding"; }
+
+  var contentKw = ["content", "caption", "copywriting", "write", "tulis", "sakluma", "keelyn", "marketing", "social media", "/content"];
+  for (var i = 0; i < contentKw.length; i++) { if (msg.indexOf(contentKw[i]) > -1) return "content"; }
+
+  var financeKw = ["finance", "kewangan", "calculate", "kira", "tax", "cukai", "budget", "bajet", "pricing", "harga", "/finance"];
+  for (var i = 0; i < financeKw.length; i++) { if (msg.indexOf(financeKw[i]) > -1) return "finance"; }
+
+  if (msg.length < 50) return "simple_chat";
+  return "simple_chat";
+}
+
+// ============================================================
+// MODEL SELECTION — Hybrid with Fallback (NEW v4.1)
+// ============================================================
+
+export function selectModel(taskType, attempt) {
+  if (!attempt) { attempt = 0; }
+  if (shouldUseFreeModel() && taskType !== "image") {
+    return "google/gemini-2.5-flash";
+  }
+  var list = TASK_MODEL_MAP[taskType] || TASK_MODEL_MAP["default"];
+  if (attempt < list.length) { return list[attempt]; }
+  return "openrouter/auto";
+}
+
+// ============================================================
+// CALL LLM (ENHANCED — now uses chatCompletion + fallback)
+// ============================================================
+
 async function callLLM(systemPrompt, userMessage, taskType) {
   if (!taskType) { taskType = "general"; }
   var selected = chooseModel(taskType);
@@ -89,49 +164,41 @@ async function callLLM(systemPrompt, userMessage, taskType) {
   console.log("MODEL: " + selected.model);
   console.log("REASON: " + selected.reason);
   console.log("=================================");
-  try {
-    var resp = await axios.post(
-      "https://openrouter.ai/api/v1/chat/completions",
-      {
-        model: selected.model,
-        messages: [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: userMessage }
-        ],
-        temperature: 0.7,
-        max_tokens: 1500
-      },
-      {
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": "Bearer " + OPENROUTER_API_KEY
-        },
-        timeout: 30000
-      }
-    );
-    var data = resp.data;
-    if (data.error) {
-      console.error("OPENROUTER ERROR: " + JSON.stringify(data.error).substring(0, 300));
-      return "Alamak, AI issue jap. Cuba lagi.";
-    }
-    var content = "";
-    if (data.choices && data.choices[0] && data.choices[0].message) {
-      content = data.choices[0].message.content || "";
-    }
-    if (!content) {
-      console.error("EMPTY RESPONSE from model");
-      return "Takde response dari AI. Cuba lagi.";
-    }
-    console.log("MODEL RESPONSE SUCCESS");
-    return content;
-  } catch (err) {
-    console.error("LLM FAILED: " + err.message);
-    if (err.response) { console.error("STATUS: " + err.response.status); }
-    return "Eh sorry, technical issue jap. Cuba lagi!";
+
+  var result = await chatCompletion({
+    model: selected.model,
+    messages: [{ role: "user", content: userMessage }],
+    systemPrompt: systemPrompt,
+    temperature: 0.7,
+    maxTokens: 1500
+  });
+
+  if (result.success) {
+    console.log("MODEL RESPONSE SUCCESS (" + (result.model || selected.model) + ")");
+    return result.content;
   }
+
+  // Fallback on rate limit
+  if (result.suggestFallback || result.error === "RATE_LIMIT") {
+    console.log("[LLM] Rate limit, trying free fallback...");
+    var fallback = await chatCompletion({
+      model: "google/gemini-2.5-flash",
+      messages: [{ role: "user", content: userMessage }],
+      systemPrompt: systemPrompt,
+      temperature: 0.7,
+      maxTokens: 1500
+    });
+    if (fallback.success) { return fallback.content; }
+  }
+
+  console.error("LLM FAILED: " + result.error);
+  return "Eh sorry, technical issue jap. Cuba lagi!";
 }
 
-// CASUAL DETECTION
+// ============================================================
+// CASUAL DETECTION (kept from v4.0)
+// ============================================================
+
 function isCasualMessage(text) {
   var casual = [
     "hi", "hello", "hey", "yo", "sup", "helo", "hai",
@@ -156,7 +223,10 @@ function isCasualMessage(text) {
   return false;
 }
 
-// TOOL EXECUTION ENGINE
+// ============================================================
+// TOOL EXECUTION ENGINE (ENHANCED with Firecrawl + new tools)
+// ============================================================
+
 async function executeWithTools(agentName, action, params, context) {
   var a = action.toLowerCase();
   console.log("");
@@ -173,13 +243,25 @@ async function executeWithTools(agentName, action, params, context) {
     else if (params.imageUrl) { imageInput = params.imageUrl; }
     else if (params.url) { imageInput = params.url; }
     var question = params.question || (context && context.originalTask) || "Analyze this image in detail.";
+
+    // Try OpenRouter vision first, fallback to original
+    var visionResult = await openRouterAnalyzeImage(imageInput, question);
+    if (visionResult.success) { return visionResult.content; }
     return await analyzeImage(imageInput, question);
   }
 
-  // WEB SEARCH
+  // WEB SEARCH (ENHANCED: Firecrawl first, Tavily fallback)
   if (a.indexOf("use websearch") > -1 || a.indexOf("search internet") > -1 || a.indexOf("cari info") > -1) {
     var q = params.query || params.topic || (context && context.originalTask) || action;
-    console.log("[Engine] " + agentName + " -> webSearch: " + q);
+    console.log("[Engine] " + agentName + " -> webSearch (Firecrawl): " + q);
+
+    var searchResult = await firecrawlSearch(q, { depth: "high", maxResults: 5 });
+    if (searchResult.success) {
+      return "Search Results:\n" + searchResult.content;
+    }
+
+    // Fallback to Tavily
+    console.log("[Engine] Firecrawl failed, fallback to Tavily...");
     var r = await webSearch(q);
     var answer = (r && r.answer) ? r.answer : "";
     var sources = "";
@@ -216,6 +298,26 @@ async function executeWithTools(agentName, action, params, context) {
     return await generateCaption(params.topic || (context && context.originalTask) || action, params.platform || "instagram", params.mood || "engaging");
   }
 
+  // CONTENT PIPELINE (NEW v4.1)
+  if (a.indexOf("use contentpipeline") > -1 || a.indexOf("content pipeline") > -1) {
+    console.log("[Engine] " + agentName + " -> contentPipeline");
+    var pipeUrl = params.url || action.match(/https?:\/\/[^\s]+/);
+    if (pipeUrl) {
+      if (typeof pipeUrl !== "string") { pipeUrl = pipeUrl[0]; }
+      var pipeResult = await processContentPipeline(pipeUrl);
+      if (pipeResult.success) {
+        var text = "Content Pipeline Complete!\n\n";
+        var plats = pipeResult.platforms;
+        if (plats.fb && plats.fb.success) { text += "=== FACEBOOK ===\n" + plats.fb.content + "\n\n"; }
+        if (plats.threads && plats.threads.success) { text += "=== THREADS ===\n" + plats.threads.content + "\n\n"; }
+        if (plats.x && plats.x.success) { text += "=== X/TWITTER ===\n" + plats.x.content + "\n\n"; }
+        return text;
+      }
+      return "Pipeline gagal: " + pipeResult.error;
+    }
+    return "Sila bagi URL. Contoh: /pipeline https://rotikaya.com/article";
+  }
+
   // NO TOOL -> LLM FALLBACK
   console.log("[Engine] " + agentName + " -> LLM fallback");
   var role = AGENT_ROLES[agentName] || "Helpful assistant. Casual Malay/English. NEVER return JSON.";
@@ -224,7 +326,10 @@ async function executeWithTools(agentName, action, params, context) {
   return await callLLM(role, "TASK: " + action + originalInfo + "\nReply casual in Malay. Do NOT return JSON.", action);
 }
 
-// PLANNER
+// ============================================================
+// PLANNER (kept from v4.0)
+// ============================================================
+
 async function planTask(understanding, memories, task) {
   if (isCasualMessage(task)) {
     console.log("Fast path: casual");
@@ -246,31 +351,158 @@ async function planTask(understanding, memories, task) {
   }
 }
 
-// BOSS APPROVE
+// ============================================================
+// BOSS APPROVE + REVIEW (kept from v4.0)
+// ============================================================
+
 async function bossApprove(step) {
   var d = await callLLM(BOSS_CHAT_PROMPT, "Reply PROCEED or SKIP (1 word + 1 sentence reason).\nSTEP: " + JSON.stringify(step), "approve");
   console.log("Boss: " + d.substring(0, 80));
   return d.toUpperCase().indexOf("SKIP") !== 0;
 }
 
-// BOSS REVIEW
 async function bossReview(task, results) {
   var txt = results.map(function(r) { return "[" + r.agent + "]: " + r.result; }).join("\n\n");
   return await callLLM(BOSS_CHAT_PROMPT, "Write a final response for Matrol based on these results.\nOriginal request: " + task + "\n\nResults:\n" + txt + "\n\nWrite like a friend. Casual Malay. Do NOT return JSON.", task);
 }
 
-// MAIN ORCHESTRATOR
+// ============================================================
+// HANDLER: Usage Report (NEW v4.1)
+// ============================================================
+
+async function handleReport() {
+  var stats = await getUsageStats();
+  var report = getCostReport();
+
+  var text = "\uD83D\uDCCA *AURA Usage Report*\n";
+  text += "\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n";
+  text += "\uD83D\uDCC5 Date: " + report.lastReset + "\n";
+  text += "\uD83D\uDCE8 Requests: " + report.requestCount + "\n";
+  text += "\uD83D\uDCB0 Cost Today: $" + report.dailyTotal.toFixed(4) + "\n";
+  text += "\uD83D\uDCB3 Budget: $" + report.budget.toFixed(2) + "\n";
+  text += "\uD83D\uDFE2 Remaining: $" + report.remaining.toFixed(4) + "\n";
+  text += "\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n";
+
+  var breakdown = report.modelBreakdown;
+  if (Object.keys(breakdown).length > 0) {
+    text += "\n\uD83E\uDD16 *Model Breakdown:*\n";
+    for (var model in breakdown) {
+      var shortName = model.split("/").length > 1 ? model.split("/")[1] : model;
+      var pct = report.requestCount > 0 ? ((breakdown[model].count / report.requestCount) * 100).toFixed(0) : 0;
+      text += "\u2022 " + shortName + ": " + breakdown[model].count + " (" + pct + "%) \u2014 $" + breakdown[model].cost.toFixed(4) + "\n";
+    }
+  }
+
+  if (stats.credits && stats.credits.data) {
+    text += "\n\uD83D\uDC8E *OpenRouter Credits:*\n";
+    text += "\u2022 Balance: $" + (stats.credits.data.balance || 0).toFixed(4) + "\n";
+  }
+
+  return text;
+}
+
+// ============================================================
+// CONTENT PIPELINE (NEW v4.1)
+// Scrape URL -> Regenerate for FB/Threads/X
+// ============================================================
+
+export async function processContentPipeline(url, options) {
+  if (!options) { options = {}; }
+  var brand = options.brand || "Sakluma";
+  var platforms = options.platforms || ["fb", "threads", "x"];
+
+  console.log("[Pipeline] URL: " + url + " | Platforms: " + platforms.join(", "));
+
+  var scrapeResult = await firecrawlSearch(
+    "Read and summarize the full content of this article: " + url,
+    { model: "google/gemini-2.5-flash", depth: "high", maxResults: 1, maxTokens: 4096 }
+  );
+
+  if (!scrapeResult.success) {
+    return { success: false, error: "Failed to scrape: " + scrapeResult.error };
+  }
+
+  var articleContent = scrapeResult.content;
+  var results = {};
+  var formats = {
+    fb: "Facebook post (panjang, storytelling, engaging, emoji). Hook at start. 3-5 paragraphs. Call-to-action.",
+    threads: "Threads post (pendek, punchy, conversational, max 500 chars). Hot take style.",
+    x: "X/Twitter post (max 280 chars, sharp, 2-3 hashtags). Quotable.",
+    ig: "Instagram caption (medium length, aesthetic, emojis). 5-10 hashtags."
+  };
+
+  for (var p = 0; p < platforms.length; p++) {
+    var platform = platforms[p];
+    var format = formats[platform] || formats.fb;
+    var prompt = "Based on this article, create a " + format +
+      "\n\nBrand: " + brand + "\nTone: Casual Malaysian, relatable, modern" +
+      "\n\nArticle content:\n" + articleContent;
+
+    var contentResult = await chatCompletion({
+      model: "anthropic/claude-sonnet-4",
+      messages: [{ role: "user", content: prompt }],
+      systemPrompt: "You are a social media content expert for " + brand + ". Create engaging content in Bahasa Malaysia.",
+      maxTokens: 2048,
+      temperature: 0.85
+    });
+
+    results[platform] = { success: contentResult.success, content: contentResult.content, model: contentResult.model };
+  }
+
+  return { success: true, originalSummary: articleContent.substring(0, 500) + "...", platforms: results };
+}
+
+// ============================================================
+// MAIN ORCHESTRATOR (ENHANCED from v4.0)
+// ============================================================
+
 export async function runOrchestrator(task, context) {
   if (!context) { context = {}; }
   var start = Date.now();
   console.log("");
   console.log("=================================");
-  console.log("AURA v4.0.0 ORCHESTRATOR START");
+  console.log("AURA v4.1.0 ORCHESTRATOR START");
   console.log("USER TASK: " + task);
   console.log("TIME: " + new Date().toISOString());
   console.log("=================================");
 
   try {
+    var taskType = detectTaskType(task);
+
+    // === NEW: Handle special commands directly ===
+
+    // /report, /usage, /cost, /stats
+    if (taskType === "report") {
+      var reportText = await handleReport();
+      return { response: reportText, result: reportText, duration: Date.now() - start, stepsExecuted: 1, totalSteps: 1, agents: ["system"] };
+    }
+
+    // /pipeline URL
+    if (taskType === "content_pipeline") {
+      var urlMatch = task.match(/https?:\/\/[^\s]+/);
+      if (urlMatch) {
+        var pipeResult = await processContentPipeline(urlMatch[0]);
+        if (pipeResult.success) {
+          var pipeText = "\uD83D\uDCF0 *Content Pipeline Complete*\n\n";
+          if (pipeResult.platforms.fb && pipeResult.platforms.fb.success) {
+            pipeText += "\uD83D\uDCD8 *Facebook:*\n" + pipeResult.platforms.fb.content + "\n\n";
+          }
+          if (pipeResult.platforms.threads && pipeResult.platforms.threads.success) {
+            pipeText += "\uD83E\uDDF5 *Threads:*\n" + pipeResult.platforms.threads.content + "\n\n";
+          }
+          if (pipeResult.platforms.x && pipeResult.platforms.x.success) {
+            pipeText += "\uD835\uDD4F *X/Twitter:*\n" + pipeResult.platforms.x.content + "\n\n";
+          }
+          pipeText += "\n\uD83D\uDD17 Source: " + urlMatch[0];
+          return { response: pipeText, result: pipeText, duration: Date.now() - start, stepsExecuted: 1, totalSteps: 1, agents: ["content"] };
+        }
+        return { response: "Pipeline gagal: " + pipeResult.error, error: true };
+      }
+      return { response: "Sila bagi URL. Contoh: /pipeline https://rotikaya.com/article", error: true };
+    }
+
+    // === ORIGINAL FLOW (kept from v4.0) ===
+
     // STEP 1 - UNDERSTANDING
     console.log("STEP 1: UNDERSTANDING");
     var understanding;
@@ -318,11 +550,11 @@ export async function runOrchestrator(task, context) {
     else if (results.length === 1) { finalResponse = results[0].result; }
     else { finalResponse = await bossReview(task, results); }
 
-    // SAFETY: strip JSON if accidentally returned
+    // SAFETY: strip JSON
     var trimmed = finalResponse.trim();
     if (trimmed.indexOf("[{") === 0 || trimmed.indexOf("```json") === 0 || trimmed.indexOf("```") === 0) {
-      console.log("WARNING: Response looks like JSON, regenerating...");
-      finalResponse = await callLLM(BOSS_CHAT_PROMPT, "Matrol asked: " + task + "\n\nYour analysis:\n" + finalResponse + "\n\nNow rewrite this as a friendly casual reply in Malay. NO JSON. NO code blocks.", task);
+      console.log("WARNING: JSON detected, regenerating...");
+      finalResponse = await callLLM(BOSS_CHAT_PROMPT, "Matrol asked: " + task + "\n\nYour analysis:\n" + finalResponse + "\n\nRewrite as friendly casual reply in Malay. NO JSON. NO code blocks.", task);
     }
     console.log("FINAL RESPONSE READY");
 
@@ -335,7 +567,7 @@ export async function runOrchestrator(task, context) {
     var duration = Date.now() - start;
     console.log("");
     console.log("=================================");
-    console.log("AURA v4.0.0 COMPLETE - " + duration + "ms");
+    console.log("AURA v4.1.0 COMPLETE - " + duration + "ms");
     console.log("AGENTS: " + agents.join(", "));
     console.log("STEPS: " + results.length + "/" + plan.length);
     console.log("=================================");
@@ -347,3 +579,16 @@ export async function runOrchestrator(task, context) {
     return { response: "Aduhh ada issue technical. Cuba lagi jap.", error: true };
   }
 }
+
+// Alternative simpler entry point
+export async function processMessage(userMessage, context) {
+  return await runOrchestrator(userMessage, context);
+}
+
+export default {
+  runOrchestrator,
+  processMessage,
+  detectTaskType,
+  selectModel,
+  processContentPipeline
+};
