@@ -2,12 +2,15 @@ import axios from "axios";
 
 var OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
 
-// === Image Generation via OpenRouter ===
+// === Image Generation via OpenRouter Chat Completions ===
+// OpenRouter uses /chat/completions with modalities param
+// NOT /images/generations (that endpoint does not exist)
 export async function generateImage(prompt, options) {
   if (!options) { options = {}; }
+
   var models = [
-    "black-forest-labs/flux-schnell",
-    "black-forest-labs/flux-1.1-pro"
+    "google/gemini-2.0-flash-001",
+    "google/gemini-2.5-flash-image-preview"
   ];
 
   for (var m = 0; m < models.length; m++) {
@@ -17,12 +20,16 @@ export async function generateImage(prompt, options) {
       console.log("[Tool] Prompt: " + prompt.substring(0, 100));
 
       var resp = await axios.post(
-        "https://openrouter.ai/api/v1/images/generations",
+        "https://openrouter.ai/api/v1/chat/completions",
         {
           model: model,
-          prompt: prompt,
-          n: 1,
-          size: "1024x1024"
+          messages: [
+            {
+              role: "user",
+              content: "Generate this image. No text reply needed, just the image: " + prompt
+            }
+          ],
+          modalities: ["image", "text"]
         },
         {
           headers: {
@@ -35,18 +42,43 @@ export async function generateImage(prompt, options) {
 
       var data = resp.data;
 
-      if (data && data.data && data.data[0]) {
-        if (data.data[0].url) {
-          console.log("[Tool] generateImage: SUCCESS (URL)");
-          return data.data[0].url;
+      // Check choices[0].message.images array
+      if (data && data.choices && data.choices[0] && data.choices[0].message) {
+        var msg = data.choices[0].message;
+
+        // Method 1: images array (official OpenRouter format)
+        if (msg.images && msg.images.length > 0) {
+          var imgObj = msg.images[0];
+          if (imgObj.image_url && imgObj.image_url.url) {
+            console.log("[Tool] generateImage: SUCCESS (images array)");
+            return imgObj.image_url.url;
+          }
         }
-        if (data.data[0].b64_json) {
-          console.log("[Tool] generateImage: SUCCESS (base64)");
-          return "data:image/png;base64," + data.data[0].b64_json;
+
+        // Method 2: content contains base64 data URI
+        if (msg.content && msg.content.indexOf("data:image") > -1) {
+          var match = msg.content.match(/data:image[^"\\s]+/);
+          if (match) {
+            console.log("[Tool] generateImage: SUCCESS (content base64)");
+            return match[0];
+          }
+        }
+
+        // Method 3: content has markdown image
+        if (msg.content && msg.content.indexOf("![") > -1) {
+          var mdMatch = msg.content.match(/!\[.*?\]\((data:image[^)]+)\)/);
+          if (mdMatch && mdMatch[1]) {
+            console.log("[Tool] generateImage: SUCCESS (markdown image)");
+            return mdMatch[1];
+          }
         }
       }
 
-      console.error("[Tool] generateImage: no image in response");
+      console.error("[Tool] generateImage: no image found in response for " + model);
+      if (data && data.choices && data.choices[0]) {
+        var preview = JSON.stringify(data.choices[0].message).substring(0, 200);
+        console.error("[Tool] Response preview: " + preview);
+      }
 
     } catch (err) {
       console.error("[Tool] generateImage error (" + models[m] + "): " + err.message);
