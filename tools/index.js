@@ -1,4 +1,4 @@
-export { sendTelegram, sendTelegramImage, sendTelegramTyping, getTelegramFile } from "./telegram.js";
+export { sendTelegram, sendTelegramImage, sendTelegramBase64Image, sendSmartResponse, sendTelegramTyping, getTelegramFile } from "./telegram.js";
 export { generateImage } from "./openRouter.js";
 export {
   supabaseQuery,
@@ -18,7 +18,7 @@ export {
   generateCaption,
 } from "./ai.js";
 
-// === Tool Map (for dynamic calling) ===
+// === Tool Map ===
 import { webSearch, research, analyzeImage, writeContent, generateCaption } from "./ai.js";
 import { generateImage } from "./openRouter.js";
 
@@ -34,7 +34,7 @@ export var TOOLS = {
 export var TOOL_DESCRIPTIONS = {
   webSearch: "Search internet for current info, news, trends (Tavily)",
   research: "Deep AI analysis and research (Gemini)",
-  generateImage: "Create AI images via OpenRouter (Gemini Flash)",
+  generateImage: "Create AI images via OpenRouter (Gemini Image)",
   analyzeImage: "Analyze/read images - OCR, identify, review (Gemini Vision)",
   writeContent: "Write professional content - articles, copies, scripts",
   generateCaption: "Quick social media caption with hooks + hashtags"
