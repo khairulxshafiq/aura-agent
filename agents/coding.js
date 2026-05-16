@@ -1,68 +1,80 @@
-// agents/coding.js
+import { askLLM } from "../llm.js";
 
-export async function codingAgent(task, logs = "", context = {}) {
+var CODING_SYSTEM = "You are AURA Coding Agent. " +
+  "Expert in Node.js, Railway, Supabase, OpenRouter, Telegram bots, API integration, Python, JavaScript. " +
+  "Analyze carefully, identify root cause, propose production-ready fix. " +
+  "Reply in casual Malay/English. Be specific and actionable. " +
+  "Include code examples when relevant. NEVER return raw JSON as final answer.";
 
-  console.log("💻 CODING AGENT ACTIVATED");
+export async function codingAgent(step) {
+  var action = step.action || "general";
+  var params = step.params || {};
+  console.log("Coding Agent: " + action);
 
-  return `
-[CODING AGENT ANALYSIS]
+  switch (action) {
 
-TASK:
-${task}
+    case "debug_issue": {
+      var diagnosis = await askLLM(
+        "Debug this issue carefully:\n" +
+        "Error: " + (params.error || "N/A") + "\n" +
+        "Context: " + (params.context || "N/A") + "\n" +
+        "Stack: Node.js + Express + Supabase + OpenRouter + Railway\n" +
+        "Provide: root cause, fix steps with code, prevention tips.",
+        { maxTokens: 800, systemPrompt: CODING_SYSTEM }
+      );
+      return { diagnosis: diagnosis };
+    }
 
-LOGS:
-${logs || "No logs provided"}
+    case "analyze_logs": {
+      var analysis = await askLLM(
+        "Analyze these logs and identify issues:\n" +
+        (params.logs || params.task || "No logs provided") + "\n" +
+        "Identify: errors, warnings, root cause, suggested fix.",
+        { maxTokens: 800, systemPrompt: CODING_SYSTEM }
+      );
+      return { analysis: analysis };
+    }
 
-CONTEXT:
-${JSON.stringify(context, null, 2)}
+    case "generate_code": {
+      var code = await askLLM(
+        "Generate production-ready code for:\n" +
+        (params.task || params.description || "N/A") + "\n" +
+        "Language: " + (params.language || "JavaScript/Node.js") + "\n" +
+        "Requirements: clean, modular, commented, secure, no hardcoded secrets.",
+        { maxTokens: 1000, systemPrompt: CODING_SYSTEM }
+      );
+      return { code: code };
+    }
 
-POSSIBLE ISSUES:
-- Invalid API response
-- Missing environment variables
-- Wrong endpoint
-- JSON parsing issue
-- OpenRouter model mismatch
-- Telegram image sending failure
-- Timeout or rate limit
-- Invalid response handling
-- Missing permissions
-- Model not supporting requested modality
+    case "code_review": {
+      var review = await askLLM(
+        "Review this code/architecture:\n" +
+        (params.code || params.description || "N/A") + "\n" +
+        "Check: bugs, performance, security, best practices. Suggest improvements.",
+        { maxTokens: 800, systemPrompt: CODING_SYSTEM }
+      );
+      return { review: review };
+    }
 
-DEBUGGING CHECKLIST:
-✅ Verify OPENROUTER_API_KEY exists
-✅ Verify model name is correct
-✅ Verify API endpoint is reachable
-✅ Verify response contains valid data
-✅ Verify Telegram bot token works
-✅ Verify image URL exists before sending
-✅ Verify Railway environment variables
-✅ Check for undefined/null values
-✅ Check logs for exact error stack
+    case "explain_error": {
+      var explanation = await askLLM(
+        "Explain this error in simple terms:\n" +
+        (params.error || params.task || "N/A") + "\n" +
+        "Explain: what happened, why, how to fix, how to prevent.",
+        { maxTokens: 600, systemPrompt: CODING_SYSTEM }
+      );
+      return { explanation: explanation };
+    }
 
-SUGGESTED FIX:
-1. Check OpenRouter response structure
-2. Validate API payload before sending
-3. Add try/catch around external API calls
-4. Add console logs before and after API calls
-5. Ensure selected model supports requested modality
-6. Fallback to cheaper/stable model if failed
-
-RECOMMENDED ACTION:
-- Use proper logging
-- Retry failed requests
-- Add fallback models
-- Separate image/text logic
-- Add response validation layer
-
-SYSTEM IMPROVEMENT IDEAS:
-✅ Dynamic model routing
-✅ Auto fallback models
-✅ Cost optimization
-✅ Automatic retry handling
-✅ AI self-debugging
-✅ Health monitoring
-✅ Tool validation layer
-
-END OF ANALYSIS
-`;
+    default: {
+      var response = await askLLM(
+        "You are a coding expert. Handle this task:\n" +
+        action + "\n" +
+        "Details: " + JSON.stringify(params) + "\n" +
+        "Provide clear, actionable, production-ready response.",
+        { maxTokens: 800, systemPrompt: CODING_SYSTEM }
+      );
+      return { response: response };
+    }
+  }
 }
