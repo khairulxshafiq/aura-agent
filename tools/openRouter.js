@@ -1,57 +1,62 @@
-// tools/openrouter.js
+import axios from "axios";
 
-import OpenAI from "openai";
+var OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
 
-const client = new OpenAI({
-  baseURL: "https://openrouter.ai/api/v1",
-  apiKey: process.env.OPENROUTER_API_KEY,
-});
+// === Image Generation via OpenRouter ===
+export async function generateImage(prompt, options) {
+  if (!options) { options = {}; }
+  var models = [
+    "black-forest-labs/flux-schnell",
+    "black-forest-labs/flux-1.1-pro"
+  ];
 
-export async function askOpenRouter({
-  model,
-  prompt,
-  system = "You are Aura AI.",
-  temperature = 0.7
-}) {
+  for (var m = 0; m < models.length; m++) {
+    try {
+      var model = models[m];
+      console.log("[Tool] generateImage model: " + model);
+      console.log("[Tool] Prompt: " + prompt.substring(0, 100));
 
-  try {
-
-    console.log(`🧠 MODEL SELECTED: ${model}`);
-
-    const completion = await client.chat.completions.create({
-      model,
-      temperature,
-      messages: [
+      var resp = await axios.post(
+        "https://openrouter.ai/api/v1/images/generations",
         {
-          role: "system",
-          content: system
+          model: model,
+          prompt: prompt,
+          n: 1,
+          size: "1024x1024"
         },
         {
-          role: "user",
-          content: prompt
+          headers: {
+            "Content-Type": "application/json",
+            "Authorization": "Bearer " + OPENROUTER_API_KEY
+          },
+          timeout: 60000
         }
-      ]
-    });
+      );
 
-    const response =
-      completion.choices?.[0]?.message?.content || "";
+      var data = resp.data;
 
-    console.log("✅ OpenRouter response received");
+      if (data && data.data && data.data[0]) {
+        if (data.data[0].url) {
+          console.log("[Tool] generateImage: SUCCESS (URL)");
+          return data.data[0].url;
+        }
+        if (data.data[0].b64_json) {
+          console.log("[Tool] generateImage: SUCCESS (base64)");
+          return "data:image/png;base64," + data.data[0].b64_json;
+        }
+      }
 
-    return response;
+      console.error("[Tool] generateImage: no image in response");
 
-  } catch (error) {
-
-    console.error("❌ OpenRouter Error:", error);
-
-    return `
-OpenRouter request failed.
-
-Possible causes:
-- Invalid model
-- API issue
-- Rate limit
-- Invalid API key
-`;
+    } catch (err) {
+      console.error("[Tool] generateImage error (" + models[m] + "): " + err.message);
+      if (err.response) {
+        console.error("[Tool] Status: " + err.response.status);
+        console.error("[Tool] Data: " + JSON.stringify(err.response.data).substring(0, 300));
+      }
+    }
   }
+
+  console.error("[Tool] generateImage: ALL MODELS FAILED");
+  return null;
 }
