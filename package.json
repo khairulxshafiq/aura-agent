@@ -1,10 +1,10 @@
 {
   "name": "aura-agent",
-  "version": "3.0.0",
-  "description": "AURA - Autonomous Unified Reasoning Agent (Boss + 7 Agents)",
+  "version": "4.0.0",
+  "description": "AURA CORE v4 - Autonomous AI Operating System",
   "type": "module",
   "scripts": {
-    "start": "node index.js",
+    "start": "node --check tools/modelRouter.js && node --check orchestrator.js && node index.js",
     "dev": "node --watch index.js"
   },
   "dependencies": {
