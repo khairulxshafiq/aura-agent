@@ -34,7 +34,7 @@ export var TOOLS = {
 export var TOOL_DESCRIPTIONS = {
   webSearch: "Search internet for current info, news, trends (Tavily)",
   research: "Deep AI analysis and research (Gemini)",
-  generateImage: "Create AI images (OpenRouter Flux)",
+  generateImage: "Create AI images via OpenRouter (Gemini Flash)",
   analyzeImage: "Analyze/read images - OCR, identify, review (Gemini Vision)",
   writeContent: "Write professional content - articles, copies, scripts",
   generateCaption: "Quick social media caption with hooks + hashtags"
