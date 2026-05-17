@@ -1,7 +1,8 @@
 // ============================================================
 // AURA v4.1 — Orchestrator (The Brain)
 // File: orchestrator.js (root)
-// ALL 19 Airtable fields restored
+// ALL 5 FIXES: Brand DNA, Smart Title, Hashtag Extract,
+//              Error Recovery, Content+Image Flow
 // ============================================================
 
 import dotenv from "dotenv";
@@ -39,7 +40,48 @@ import {
 var OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
 
 // ============================================================
-// BOSS PLAN PROMPT
+// HELPER: Extract smart title from caption
+// ============================================================
+function extractSmartTitle(caption, originalTask) {
+  if (!caption) return (originalTask || "Untitled").substring(0, 80);
+
+  var text = caption.replace(/[\uD800-\uDBFF][\uDC00-\uDFFF]/g, "").trim();
+
+  // Try first meaningful line (skip empty lines, ** markers, emoji-only lines)
+  var lines = text.split("\n");
+  for (var i = 0; i < lines.length; i++) {
+    var line = lines[i].replace(/\*\*/g, "").replace(/#\w+/g, "").trim();
+    if (line.length > 10 && line.length < 100) {
+      return line.substring(0, 80);
+    }
+  }
+
+  // Fallback: first 80 chars of caption
+  return text.substring(0, 80).replace(/\n/g, " ");
+}
+
+// ============================================================
+// HELPER: Extract hashtags from caption text
+// ============================================================
+function extractHashtags(caption) {
+  if (!caption) return "";
+  var matches = caption.match(/#[A-Za-z0-9_\u00C0-\u024F]+/g);
+  if (!matches) return "";
+  // Deduplicate
+  var unique = [];
+  var seen = {};
+  for (var i = 0; i < matches.length; i++) {
+    var tag = matches[i];
+    if (!seen[tag.toLowerCase()]) {
+      seen[tag.toLowerCase()] = true;
+      unique.push(tag);
+    }
+  }
+  return unique.join(" ");
+}
+
+// ============================================================
+// BOSS PLAN PROMPT (FIX 5: auto-include image + airtable)
 // ============================================================
 var BOSS_PLAN_PROMPT =
   "You are AURA - Matrol personal AI assistant.\n\n" +
@@ -59,22 +101,28 @@ var BOSS_PLAN_PROMPT =
   "- airtableFindByFormula: find record (latest draft) in Airtable\n\n" +
   "PLANNING RULES:\n" +
   "1. CASUAL (hi, hello, thanks) -> 1 step, content agent, casual reply, NO tools\n" +
-  "2. CONTENT (caption, article) -> content agent, use generateCaption or use writeContent\n" +
-  "3. IMAGE GEN (buat gambar, generate) -> content agent, use generateImage: [description]\n" +
+  "2. CONTENT REQUEST (caption, draft, article, post) -> ALWAYS 3 steps:\n" +
+  "   Step 1: use generateCaption or use writeContent (create the text)\n" +
+  "   Step 2: use generateImage (create matching visual)\n" +
+  "   Step 3: use airtableCreate (save everything as Draft)\n" +
+  "3. IMAGE GEN ONLY (buat gambar) -> 1 step, use generateImage: [description]\n" +
   "4. IMAGE ANALYSIS (analyze gambar) -> content agent, use analyzeImage\n" +
   "5. RESEARCH (cari info, trends) -> ops agent, use webSearch for [query]\n" +
   "6. CODING (error, bug, debug, API, code) -> coding agent, direct response\n" +
   "7. BUSINESS -> relevant agent + tools, max 4 steps\n" +
   "8. REPORT (/report, /usage, /cost) -> direct report, NO planning needed\n" +
   "9. PIPELINE (/pipeline URL) -> content agent, use contentPipeline\n" +
-  "10. SAVE DRAFT -> after content generated, use airtableCreate\n" +
-  "11. UPDATE DRAFT -> use airtableUpdate with recordId + fields\n\n" +
+  "10. UPDATE DRAFT -> use airtableUpdate with recordId + fields\n\n" +
+  "CONTENT IMAGE RULES:\n" +
+  "- When generating image for content, describe the image based on the content topic\n" +
+  "- Example: content about daging salai -> image: 'delicious Malaysian smoked beef jerky on wooden plate, rustic kampung style, warm lighting, food photography'\n" +
+  "- ALWAYS make image description specific and visual\n\n" +
   "OUTPUT: Return ONLY valid JSON array\n" +
-  '[{"step":1,"agent":"content","action":"casual reply","params":{},"description":"why","depends_on":null}]\n\n' +
+  '[{"step":1,"agent":"content","action":"use generateCaption","params":{"topic":"...","platform":"facebook"},"description":"Generate caption","depends_on":null}]\n\n' +
   "CRITICAL:\n" +
   "- Include use [toolName] in action when tool needed\n" +
-  "- Casual = NO tools. Complex = max 4 steps.\n" +
-  "- NEVER over-orchestrate";
+  "- Casual = NO tools. Content = ALWAYS 3 steps (caption + image + airtable).\n" +
+  "- NEVER over-orchestrate. Max 4 steps.";
 
 // ============================================================
 // CHAT PROMPT
@@ -89,6 +137,7 @@ var BOSS_CHAT_PROMPT =
   "- NEVER return JSON\n" +
   "- NEVER return code blocks unless asked\n" +
   "- NEVER say I am an AI language model\n" +
+  "- NEVER say you cannot access Airtable or any tool\n" +
   "- NEVER promote Sakluma unless asked\n" +
   "- NEVER sound robotic\n" +
   "- Reply like a real smart friend\n" +
@@ -96,27 +145,46 @@ var BOSS_CHAT_PROMPT =
   "- Natural emoji usage";
 
 // ============================================================
-// AGENT ROLES
+// AGENT ROLES (FIX 1: Brand DNA + Platform Rules)
 // ============================================================
 var AGENT_ROLES = {
   content:
-    "You are AURA Content agent. Reply in casual Malay/English. " +
-    "CASUAL CHAT: Reply like a friend. Short, warm. " +
-    "CONTENT: Write engaging content. NEVER return JSON. Default language: Malay.",
+    "You are AURA Content agent for Sakluma brand.\n\n" +
+    "BRAND DNA (Sakluma):\n" +
+    "- Malaysian food brand specializing in smoked meats (daging salai, itik salai, ikan keli salai)\n" +
+    "- Tone: warm, authentic, kampung vibes, storytelling\n" +
+    "- Voice: like a friend sharing food secrets, NOT salesperson\n" +
+    "- Emoji: natural, max 3-5 per post, not overloaded\n" +
+    "- Language: Bahasa Malaysia (casual), boleh campur sikit English\n" +
+    "- FORBIDDEN: cringe, too excited, fake enthusiasm, corporate tone\n" +
+    "- ALWAYS include CTA (soalan, tag kawan, DM for order)\n\n" +
+    "PLATFORM RULES:\n" +
+    "- Facebook: storytelling 3-5 perenggan, 200-350 patah perkataan, hook kuat, 2 soalan engage, CTA\n" +
+    "- Instagram: pendek catchy 80-150 patah perkataan, aesthetic, 8-12 hashtags at END\n" +
+    "- Threads: max 500 chars, punchy hot take, conversational\n" +
+    "- X/Twitter: max 280 chars, sharp, 2-3 hashtags\n\n" +
+    "CONTENT STRUCTURE (Facebook):\n" +
+    "1. HOOK (1 line - soalan atau statement bold)\n" +
+    "2. STORY (2-3 perenggan - cerita, experience, value)\n" +
+    "3. CTA (1 line - soalan/tag kawan/DM)\n" +
+    "4. HASHTAGS (5-8 hashtags)\n\n" +
+    "CASUAL CHAT: Reply like a friend. Short, warm. NEVER mention business unless asked.\n" +
+    "NEVER return JSON. Default language: Malay.",
+
   finance:
-    "AURA Finance agent. Pricing, costs, ROI, budgets. Casual Malay/English. NEVER return JSON. Default language: Malay.",
+    "AURA Finance agent. Pricing, costs, ROI, budgets. Casual Malay/English. NEVER return JSON.",
   sales:
-    "AURA Sales agent. Quotations, customer replies, CRM. Casual Malay/English. NEVER return JSON. Default language: Malay.",
+    "AURA Sales agent. Quotations, customer replies, CRM. Casual Malay/English. NEVER return JSON.",
   marketing:
-    "AURA Marketing agent. Campaigns, ads, market analysis. Casual Malay/English. NEVER return JSON. Default language: Malay.",
+    "AURA Marketing agent. Campaigns, ads, market analysis. Casual Malay/English. NEVER return JSON.",
   training:
-    "AURA Training agent. SOPs, modules, quizzes. Casual Malay/English. NEVER return JSON. Default language: Malay.",
+    "AURA Training agent. SOPs, modules, quizzes. Casual Malay/English. NEVER return JSON.",
   ops:
-    "AURA Ops agent. Scheduling, logistics, status. Casual Malay/English. NEVER return JSON. Default language: Malay.",
+    "AURA Ops agent. Scheduling, logistics, status. Casual Malay/English. NEVER return JSON.",
   architect:
-    "AURA Architect agent. Tech, debugging, APIs, infrastructure. Casual Malay/English. NEVER return JSON. Default language: Malay.",
+    "AURA Architect agent. Tech, debugging, APIs, infrastructure. Casual Malay/English. NEVER return JSON.",
   coding:
-    "AURA Coding agent. Debug, code generation, log analysis, API troubleshooting. NEVER return JSON. Default language: Malay."
+    "AURA Coding agent. Debug, code generation, log analysis, API troubleshooting. NEVER return JSON."
 };
 
 // ============================================================
@@ -130,7 +198,7 @@ export function detectTaskType(message) {
   if (msg.includes("generate image") || msg.includes("buat gambar") || msg.includes("/image") || msg.includes("/img")) return "image";
   if (msg.includes("search") || msg.includes("cari") || msg.includes("trend") || msg.includes("berita") || msg.includes("/search") || msg.includes("/research")) return "research";
   if (msg.includes("code") || msg.includes("debug") || msg.includes("error") || msg.includes("bug") || msg.includes("/code")) return "coding";
-  if (msg.includes("caption") || msg.includes("content") || msg.includes("tulis") || msg.includes("sakluma") || msg.includes("keelyn") || msg.includes("/content") || msg.includes("copywriting") || msg.includes("marketing")) return "content";
+  if (msg.includes("caption") || msg.includes("content") || msg.includes("tulis") || msg.includes("draft") || msg.includes("sakluma") || msg.includes("keelyn") || msg.includes("/content") || msg.includes("copywriting") || msg.includes("marketing") || msg.includes("post")) return "content";
   if (msg.includes("finance") || msg.includes("kewangan") || msg.includes("kira") || msg.includes("budget") || msg.includes("pricing") || msg.includes("/finance")) return "finance";
 
   if (msg.length < 50) return "simple_chat";
@@ -143,7 +211,6 @@ export function detectTaskType(message) {
 export function selectModel(taskType, attempt) {
   if (!attempt) attempt = 0;
   if (shouldUseFreeModel() && taskType !== "image") return "google/gemini-2.5-flash";
-
   var list = TASK_MODEL_MAP[taskType] || TASK_MODEL_MAP["default"];
   if (attempt < list.length) return list[attempt];
   return "openrouter/auto";
@@ -235,7 +302,6 @@ async function executeWithTools(agentName, action, params, context) {
     if (context && context.imageBase64) imageInput = context.imageBase64;
     else if (params.imageUrl) imageInput = params.imageUrl;
     else if (params.url) imageInput = params.url;
-
     var question = params.question || (context && context.originalTask) || "Analyze this image in detail.";
     var visionResult = await openRouterAnalyzeImage(imageInput, question);
     if (visionResult.success) return visionResult.content;
@@ -246,10 +312,8 @@ async function executeWithTools(agentName, action, params, context) {
   if (a.includes("use websearch") || a.includes("search internet") || a.includes("cari info")) {
     var q = params.query || params.topic || (context && context.originalTask) || action;
     console.log("[Engine] " + agentName + " -> webSearch (Firecrawl): " + q);
-
     var searchResult = await firecrawlSearch(q, { depth: "high", maxResults: 5 });
     if (searchResult.success) return "Search Results:\n" + searchResult.content;
-
     console.log("[Engine] Firecrawl failed, fallback to Tavily...");
     var r = await webSearch(q);
     var answer = (r && r.answer) ? r.answer : "";
@@ -269,14 +333,18 @@ async function executeWithTools(agentName, action, params, context) {
   // IMAGE GENERATION
   if (a.includes("use generateimage") || a.includes("buat gambar") || a.includes("create image") || a.includes("generate image")) {
     var imgPrompt = params.prompt || params.description || action.replace(/use generateimage:?\s*/i, "");
+    // If prompt is too short/generic, enrich it from original task
+    if (imgPrompt.length < 20 && context && context.originalTask) {
+      imgPrompt = "Food photography of " + context.originalTask.substring(0, 100) + ", Malaysian style, warm lighting, appetizing";
+    }
     console.log("IMAGE GENERATION: " + imgPrompt);
     var imgUrl = await generateImage(imgPrompt, { width: 1024, height: 1024 });
-    if (imgUrl) return "Gambar siap!\n\n" + imgUrl;
+    if (imgUrl) return "IMAGE_URL:" + imgUrl;
     return "Gambar tak berjaya. Cuba lagi?";
   }
 
   // WRITE CONTENT
-  if (a.includes("use writecontent") || a.includes("tulis artikel") || a.includes("buat content") || a === "writecontent") {
+  if (a.includes("use writecontent") || a.includes("tulis artikel") || a === "writecontent") {
     console.log("[Engine] " + agentName + " -> writeContent");
     return await writeContent(
       params.brief || (context && context.originalTask) || action,
@@ -316,39 +384,58 @@ async function executeWithTools(agentName, action, params, context) {
   }
 
   // ============================================================
-  // AIRTABLE: CREATE DRAFT (ALL 19 FIELDS)
+  // AIRTABLE: CREATE DRAFT (FIX 2 + FIX 3: smart title + hashtag extract)
   // ============================================================
   if (a.includes("use airtablecreate") || a.includes("save to airtable") || a.includes("airtable create") || a === "airtablecreate") {
     console.log("[Engine] " + agentName + " -> airtableCreate");
 
+    // Get caption from previous step
     var captionValue = params.caption || params.Caption || "";
-    if (!captionValue && context && context.lastResult) captionValue = context.lastResult;
+    if (!captionValue && context && context.lastResult) {
+      // Check if lastResult is an image URL (from step 2)
+      if (context.lastResult.indexOf("IMAGE_URL:") === 0) {
+        // Caption should come from step before that
+        captionValue = context.captionFromStep1 || "";
+      } else {
+        captionValue = context.lastResult;
+      }
+    }
 
-    var titleValue = params.title || params.Title || "";
-    if (!titleValue && context && context.originalTask) titleValue = context.originalTask.substring(0, 80);
+    // Get image URL from previous steps
+    var imageUrlValue = params.imageUrl || params["Image URL"] || "";
+    if (!imageUrlValue && context && context.imageFromStep2) {
+      imageUrlValue = context.imageFromStep2;
+    }
+
+    // FIX 2: Smart title from caption (not from prompt)
+    var titleValue = extractSmartTitle(captionValue, context && context.originalTask);
+
+    // FIX 3: Auto-extract hashtags
+    var hashtagsValue = extractHashtags(captionValue);
+
+    // Detect platform from original task
+    var platformValue = params.platform || params.Platform || "Facebook";
+    var taskLower = (context && context.originalTask || "").toLowerCase();
+    if (taskLower.includes("instagram") || taskLower.includes("ig")) platformValue = "Instagram";
+    else if (taskLower.includes("thread")) platformValue = "Threads";
+    else if (taskLower.includes("twitter") || taskLower.includes(" x ")) platformValue = "Twitter";
 
     var fields = {
-      "Title":               titleValue || "Untitled",
+      "Title":               titleValue,
       "Caption":             captionValue || "",
-      "Image URL":           params.imageUrl || params["Image URL"] || "",
-      "Platform":            params.platform || params.Platform || "Facebook",
-      "Status":              params.status || params.Status || "Draft",
-      "Scheduled Date":      params.scheduledDate || params["Scheduled Date"] || null,
-      "Created By":          params.createdBy || params["Created By"] || (context && context.from) || "AURA",
-      "Notes":               params.notes || params.Notes || "",
-      "Post Link":           params.postLink || params["Post Link"] || "",
-      "Content Type":        params.contentType || params["Content Type"] || "Image",
-      "AI Caption":          params.aiCaption || params["AI Caption"] || captionValue || "",
-      "AI Hashtags":         params.aiHashtags || params["AI Hashtags"] || "",
-      "AI Content Insights": params.aiInsights || params["AI Content Insights"] || "",
-      "Hashtags":            params.hashtags || params.Hashtags || "",
-      "Video URL":           params.videoUrl || params["Video URL"] || "",
-      "Campaign":            params.campaign || params.Campaign || "",
-      "Brand":               params.brand || params.Brand || "Sakluma",
-      "Approved By":         params.approvedBy || params["Approved By"] || "",
-      "Posted Link":         params.postedLink || params["Posted Link"] || ""
+      "Image URL":           imageUrlValue,
+      "Platform":            platformValue,
+      "Status":              "Draft",
+      "Created By":          (context && context.from) || "AURA",
+      "Content Type":        imageUrlValue ? "Image" : "Post",
+      "AI Caption":          captionValue || "",
+      "AI Hashtags":         hashtagsValue,
+      "AI Content Insights": "Platform: " + platformValue + " | Auto-generated by AURA Content Agent",
+      "Hashtags":            hashtagsValue,
+      "Brand":               "Sakluma"
     };
 
+    // Remove empty
     var cleaned = {};
     for (var fk in fields) {
       if (fields[fk] !== null && fields[fk] !== undefined && fields[fk] !== "") {
@@ -358,42 +445,41 @@ async function executeWithTools(agentName, action, params, context) {
 
     try {
       var rec = await airtableCreate(cleaned);
-      return "✅ Saved to Airtable (Draft)\nRecord ID: " + rec.id;
+      var response = "\u2705 Saved to Airtable (Draft)\nRecord ID: " + rec.id;
+      response += "\nTitle: " + titleValue;
+      if (hashtagsValue) response += "\nHashtags: " + hashtagsValue;
+      if (imageUrlValue) response += "\nImage: attached";
+      return response;
     } catch (err) {
       console.error("[AirtableCreate] Failed:", err.message);
-      return "❌ Airtable save failed: " + err.message;
+      return "\u274C Airtable save failed: " + err.message;
     }
   }
 
-  // ============================================================
   // AIRTABLE: UPDATE RECORD
-  // ============================================================
   if (a.includes("use airtableupdate") || a.includes("airtable update")) {
     console.log("[Engine] " + agentName + " -> airtableUpdate");
     var recordId = params.recordId || params.id;
-    if (!recordId) return "❌ airtableUpdate perlukan recordId (recXXXX).";
-
+    if (!recordId) return "\u274C airtableUpdate perlukan recordId (recXXXX).";
     try {
       var updated = await airtableUpdate(recordId, params.fields || {});
-      return "✅ Updated Airtable\nRecord ID: " + updated.id;
+      return "\u2705 Updated Airtable\nRecord ID: " + updated.id;
     } catch (err2) {
       console.error("[AirtableUpdate] Failed:", err2.message);
-      return "❌ Airtable update failed: " + err2.message;
+      return "\u274C Airtable update failed: " + err2.message;
     }
   }
 
-  // ============================================================
   // AIRTABLE: FIND LATEST DRAFT
-  // ============================================================
   if (a.includes("use airtablefindbyformula") || a.includes("find latest draft")) {
     console.log("[Engine] " + agentName + " -> airtableFindByFormula");
     try {
       var res = await airtableFindByFormula('{Status}="Draft"', { maxRecords: 1 });
-      if (!res.records || res.records.length === 0) return "❌ Tak jumpa Draft.";
-      return "✅ Latest Draft Found\nRecord ID: " + res.records[0].id;
+      if (!res.records || res.records.length === 0) return "\u274C Tak jumpa Draft.";
+      return "\u2705 Latest Draft Found\nRecord ID: " + res.records[0].id;
     } catch (err3) {
       console.error("[AirtableFind] Failed:", err3.message);
-      return "❌ Airtable find failed: " + err3.message;
+      return "\u274C Airtable find failed: " + err3.message;
     }
   }
 
@@ -463,7 +549,6 @@ async function handleReport() {
   text += "\uD83D\uDCB0 Cost Today: $" + report.dailyTotal.toFixed(4) + "\n";
   text += "\uD83D\uDCB3 Budget: $" + report.budget.toFixed(2) + "\n";
   text += "\uD83D\uDFE2 Remaining: $" + report.remaining.toFixed(4) + "\n";
-  text += "\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n";
 
   var breakdown = report.modelBreakdown;
   if (Object.keys(breakdown).length > 0) {
@@ -473,11 +558,6 @@ async function handleReport() {
       var pct = report.requestCount > 0 ? ((breakdown[model].count / report.requestCount) * 100).toFixed(0) : 0;
       text += "\u2022 " + shortName + ": " + breakdown[model].count + " (" + pct + "%) \u2014 $" + breakdown[model].cost.toFixed(4) + "\n";
     }
-  }
-
-  if (stats.credits && stats.credits.data) {
-    text += "\n\uD83D\uDC8E *OpenRouter Credits:*\n";
-    text += "\u2022 Balance: $" + (stats.credits.data.balance || 0).toFixed(4) + "\n";
   }
 
   return text;
@@ -490,8 +570,6 @@ export async function processContentPipeline(url, options) {
   if (!options) options = {};
   var brand = options.brand || "Sakluma";
   var platforms = options.platforms || ["fb", "threads", "x"];
-
-  console.log("[Pipeline] URL: " + url + " | Platforms: " + platforms.join(", "));
 
   var scrapeResult = await firecrawlSearch(
     "Read and summarize the full content of this article: " + url,
@@ -513,11 +591,8 @@ export async function processContentPipeline(url, options) {
   for (var p = 0; p < platforms.length; p++) {
     var platform = platforms[p];
     var format = formats[platform] || formats.fb;
-
-    var prompt =
-      "Based on this article, create a " + format +
-      "\n\nBrand: " + brand +
-      "\nTone: Casual Malaysian, relatable, modern" +
+    var prompt = "Based on this article, create a " + format +
+      "\n\nBrand: " + brand + "\nTone: Casual Malaysian, relatable, modern" +
       "\n\nArticle content:\n" + articleContent;
 
     var contentResult = await chatCompletion({
@@ -535,7 +610,7 @@ export async function processContentPipeline(url, options) {
 }
 
 // ============================================================
-// MAIN ORCHESTRATOR
+// MAIN ORCHESTRATOR (FIX 4: error recovery per step)
 // ============================================================
 export async function runOrchestrator(task, context) {
   if (!context) context = {};
@@ -578,7 +653,6 @@ export async function runOrchestrator(task, context) {
     var understanding;
     if (isCasualMessage(task)) {
       understanding = "Casual message. Reply like a friend in Malay.";
-      console.log("CASUAL MESSAGE DETECTED");
     } else {
       understanding = await callLLM(BOSS_CHAT_PROMPT, "What does Matrol want? Reply in 1-2 sentences in Malay. Dont assume Sakluma.\nMessage: " + task, task);
     }
@@ -598,10 +672,12 @@ export async function runOrchestrator(task, context) {
     var agents = Object.keys(agentSet);
     console.log("PLAN: " + plan.length + " steps, agents: " + agents.join(", "));
 
-    // STEP 4 - EXECUTION (with lastResult pass-through)
+    // STEP 4 - EXECUTION (FIX 4: try-catch per step + FIX 5: pass caption & image between steps)
     console.log("STEP 4: EXECUTION");
     var results = [];
     var lastResult = null;
+    var captionFromStep1 = null;
+    var imageFromStep2 = null;
     var sortedPlan = plan.sort(function(a, b) { return a.step - b.step; });
 
     for (var s = 0; s < sortedPlan.length; s++) {
@@ -612,17 +688,37 @@ export async function runOrchestrator(task, context) {
       if (sortedPlan.length > 1) approved = await bossApprove(step);
       if (!approved) { console.log("STEP SKIPPED"); continue; }
 
-      var result = await executeWithTools(step.agent, step.action, step.params || {}, {
-        imageBase64: context.imageBase64 || null,
-        originalTask: task,
-        understanding: understanding,
-        from: context.from || "Telegram",
-        lastResult: lastResult
-      });
+      // FIX 4: Wrap each step in try-catch
+      try {
+        var result = await executeWithTools(step.agent, step.action, step.params || {}, {
+          imageBase64: context.imageBase64 || null,
+          originalTask: task,
+          understanding: understanding,
+          from: context.from || "Telegram",
+          lastResult: lastResult,
+          captionFromStep1: captionFromStep1,
+          imageFromStep2: imageFromStep2
+        });
 
-      lastResult = result;
-      results.push({ step: step.step, agent: step.agent, action: step.action, result: result });
-      console.log("[" + step.agent + "] COMPLETE");
+        // Track outputs for cross-step data flow
+        if (result && typeof result === "string") {
+          if (result.indexOf("IMAGE_URL:") === 0) {
+            imageFromStep2 = result.replace("IMAGE_URL:", "");
+            result = "Gambar siap!\n\n" + imageFromStep2;
+          } else if (!captionFromStep1 && result.length > 50) {
+            captionFromStep1 = result;
+          }
+        }
+
+        lastResult = result;
+        results.push({ step: step.step, agent: step.agent, action: step.action, result: result });
+        console.log("[" + step.agent + "] COMPLETE");
+
+      } catch (stepError) {
+        console.error("[STEP " + step.step + " FAILED] " + stepError.message);
+        results.push({ step: step.step, agent: step.agent, action: step.action, result: "Step failed: " + stepError.message });
+        // Continue to next step instead of crashing
+      }
     }
 
     console.log("EXECUTED: " + results.length + "/" + plan.length);
@@ -636,7 +732,6 @@ export async function runOrchestrator(task, context) {
 
     var trimmed = (finalResponse || "").trim();
     if (trimmed.indexOf("[{") === 0 || trimmed.indexOf("```json") === 0 || trimmed.indexOf("```") === 0) {
-      console.log("WARNING: JSON detected, regenerating...");
       finalResponse = await callLLM(BOSS_CHAT_PROMPT, "Matrol asked: " + task + "\n\nYour analysis:\n" + finalResponse + "\n\nRewrite as friendly casual reply in Malay. NO JSON. NO code blocks.", task);
     }
 
