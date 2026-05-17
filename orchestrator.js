@@ -30,8 +30,6 @@ import {
   saveMemory,
   logActivity,
   callToolLLM,
-
-  // ✅ Airtable tools (from tools/index.js)
   airtableCreate,
   airtableUpdate,
   airtableFindByFormula,
@@ -41,7 +39,7 @@ import {
 var OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
 
 // ============================================================
-// BOSS PLAN PROMPT (updated with new tools + Airtable)
+// BOSS PLAN PROMPT (updated with Airtable)
 // ============================================================
 var BOSS_PLAN_PROMPT =
   "You are AURA - Matrol personal AI assistant.\n\n" +
@@ -235,7 +233,7 @@ function isCasualMessage(text) {
 }
 
 // ============================================================
-// TOOL EXECUTION ENGINE — includes Firecrawl + Content Pipeline + Airtable
+// TOOL EXECUTION ENGINE
 // ============================================================
 async function executeWithTools(agentName, action, params, context) {
   var a = (action || "").toLowerCase();
@@ -258,7 +256,6 @@ async function executeWithTools(agentName, action, params, context) {
 
     var visionResult = await openRouterAnalyzeImage(imageInput, question);
     if (visionResult.success) return visionResult.content;
-
     return await analyzeImage(imageInput, question);
   }
 
@@ -328,27 +325,35 @@ async function executeWithTools(agentName, action, params, context) {
   }
 
   // ============================================================
-  // ✅ AIRTABLE: CREATE DRAFT
-  // Trigger examples:
-  // - "use airtableCreate"
-  // - "save to airtable"
+  // AIRTABLE: CREATE DRAFT
   // ============================================================
-  if (a.indexOf("use airtablecreate") > -1 || a.indexOf("save to airtable") > -1 || a.indexOf("airtable create") > -1) {
+  if (a.indexOf("use airtablecreate") > -1 || a.indexOf("save to airtable") > -1 || a.indexOf("airtable create") > -1 || a === "airtablecreate") {
     console.log("[Engine] " + agentName + " -> airtableCreate");
 
+    // Auto-fill caption from previous step output if params empty
+    var captionValue = params.caption || params.Caption || "";
+    if (!captionValue && context && context.lastResult) {
+      captionValue = context.lastResult;
+    }
+
+    var titleValue = params.title || params.Title || "";
+    if (!titleValue && context && context.originalTask) {
+      // Extract a short title from original task
+      titleValue = context.originalTask.substring(0, 80);
+    }
+
     var fields = {
-      "Title": params.title || params.Title || "Untitled",
-      "Caption": params.caption || params.Caption || "",
+      "Title": titleValue || "Untitled",
+      "Caption": captionValue,
       "Image URL": params.imageUrl || params["Image URL"] || "",
       "Platform": params.platform || params.Platform || "Facebook",
       "Status": params.status || params.Status || "Draft",
       "Scheduled Date": params.scheduledDate || params["Scheduled Date"] || null,
       "Created By": params.createdBy || params["Created By"] || (context && context.from) || "AURA",
       "Notes": params.notes || params.Notes || "",
-
       "Post Link": params.postLink || params["Post Link"] || "",
       "Content Type": params.contentType || params["Content Type"] || "Post",
-      "AI Caption": params.aiCaption || params["AI Caption"] || "",
+      "AI Caption": params.aiCaption || params["AI Caption"] || captionValue,
       "AI Hashtags": params.aiHashtags || params["AI Hashtags"] || "",
       "Hashtags": params.hashtags || params.Hashtags || "",
       "Video URL": params.videoUrl || params["Video URL"] || "",
@@ -359,35 +364,59 @@ async function executeWithTools(agentName, action, params, context) {
       "AI Content Insights": params.aiInsights || params["AI Content Insights"] || ""
     };
 
-    var rec = await airtableCreate(fields);
-    return "✅ Saved to Airtable (Draft)\nRecord ID: " + rec.id;
+    // Remove null/undefined fields to avoid Airtable errors
+    var cleanedFields = {};
+    for (var key in fields) {
+      if (fields[key] !== null && fields[key] !== undefined && fields[key] !== "") {
+        cleanedFields[key] = fields[key];
+      }
+    }
+
+    try {
+      var rec = await airtableCreate(cleanedFields);
+      return "✅ Saved to Airtable (Draft)\nRecord ID: " + rec.id;
+    } catch (airtableErr) {
+      console.error("[AirtableCreate] Failed:", airtableErr.message);
+      return "❌ Airtable save failed: " + airtableErr.message;
+    }
   }
 
-  // ✅ AIRTABLE: UPDATE RECORD
+  // AIRTABLE: UPDATE RECORD
   if (a.indexOf("use airtableupdate") > -1 || a.indexOf("airtable update") > -1) {
     console.log("[Engine] " + agentName + " -> airtableUpdate");
     var recordId = params.recordId || params.id;
     if (!recordId) return "❌ airtableUpdate perlukan recordId. Contoh: { recordId: \"recXXXX\", fields: { Caption: \"...\" } }";
 
     var updateFields = params.fields || {};
-    var updated = await airtableUpdate(recordId, updateFields);
-    return "✅ Updated Airtable\nRecord ID: " + updated.id;
+    try {
+      var updated = await airtableUpdate(recordId, updateFields);
+      return "✅ Updated Airtable\nRecord ID: " + updated.id;
+    } catch (updateErr) {
+      console.error("[AirtableUpdate] Failed:", updateErr.message);
+      return "❌ Airtable update failed: " + updateErr.message;
+    }
   }
 
-  // ✅ AIRTABLE: FIND LATEST DRAFT (helper)
+  // AIRTABLE: FIND LATEST DRAFT
   if (a.indexOf("use airtablefindbyformula") > -1 || a.indexOf("find latest draft") > -1) {
     console.log("[Engine] " + agentName + " -> airtableFindByFormula");
 
     var brand = params.brand || "Sakluma";
     var platform = params.platform || "";
-    var formula = 'AND({Status}="Draft",{Brand}="' + brand + '")';
+    var formula = '{Status}="Draft"';
+    if (brand) formula = 'AND({Status}="Draft",{Brand}="' + brand + '")';
     if (platform) formula = 'AND({Status}="Draft",{Brand}="' + brand + '",{Platform}="' + platform + '")';
 
-    var res = await airtableFindByFormula(formula, { maxRecords: 1 });
-    if (!res.records || res.records.length === 0) return "❌ Tak jumpa Draft lagi dalam Airtable.";
+    try {
+      var res = await airtableFindByFormula(formula, { maxRecords: 1 });
+      if (!res.records || res.records.length === 0) return "❌ Tak jumpa Draft lagi dalam Airtable.";
 
-    var r = res.records[0];
-    return "✅ Latest Draft Found\nRecord ID: " + r.id + "\nTitle: " + ((r.fields && r.fields.Title) ? r.fields.Title : "-");
+      var foundRec = res.records[0];
+      return "✅ Latest Draft Found\nRecord ID: " + foundRec.id + "\nTitle: " + ((foundRec.fields && foundRec.fields.Title) ? foundRec.fields.Title : "-");
+    } catch (findErr) {
+      console.error("[AirtableFind] Failed:", findErr.message);
+      return "❌ Airtable find failed: " + findErr.message;
+    }
   }
 
   // NO TOOL -> LLM FALLBACK
@@ -451,35 +480,35 @@ async function handleReport() {
   var stats = await getUsageStats();
   var report = getCostReport();
 
-  var text = "📊 *AURA Usage Report*\n";
-  text += "━━━━━━━━━━━━━━━━━━━━\n";
-  text += "📅 Date: " + report.lastReset + "\n";
-  text += "📨 Requests: " + report.requestCount + "\n";
-  text += "💰 Cost Today: $" + report.dailyTotal.toFixed(4) + "\n";
-  text += "💳 Budget: $" + report.budget.toFixed(2) + "\n";
-  text += "🟢 Remaining: $" + report.remaining.toFixed(4) + "\n";
-  text += "━━━━━━━━━━━━━━━━━━━━\n";
+  var text = "\uD83D\uDCCA *AURA Usage Report*\n";
+  text += "\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n";
+  text += "\uD83D\uDCC5 Date: " + report.lastReset + "\n";
+  text += "\uD83D\uDCE8 Requests: " + report.requestCount + "\n";
+  text += "\uD83D\uDCB0 Cost Today: $" + report.dailyTotal.toFixed(4) + "\n";
+  text += "\uD83D\uDCB3 Budget: $" + report.budget.toFixed(2) + "\n";
+  text += "\uD83D\uDFE2 Remaining: $" + report.remaining.toFixed(4) + "\n";
+  text += "\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n";
 
   var breakdown = report.modelBreakdown;
   if (Object.keys(breakdown).length > 0) {
-    text += "\n🤖 *Model Breakdown:*\n";
+    text += "\n\uD83E\uDD16 *Model Breakdown:*\n";
     for (var model in breakdown) {
       var shortName = model.split("/").length > 1 ? model.split("/")[1] : model;
       var pct = report.requestCount > 0 ? ((breakdown[model].count / report.requestCount) * 100).toFixed(0) : 0;
-      text += "• " + shortName + ": " + breakdown[model].count + " (" + pct + "%) — $" + breakdown[model].cost.toFixed(4) + "\n";
+      text += "\u2022 " + shortName + ": " + breakdown[model].count + " (" + pct + "%) \u2014 $" + breakdown[model].cost.toFixed(4) + "\n";
     }
   }
 
   if (stats.credits && stats.credits.data) {
-    text += "\n💎 *OpenRouter Credits:*\n";
-    text += "• Balance: $" + (stats.credits.data.balance || 0).toFixed(4) + "\n";
+    text += "\n\uD83D\uDC8E *OpenRouter Credits:*\n";
+    text += "\u2022 Balance: $" + (stats.credits.data.balance || 0).toFixed(4) + "\n";
   }
 
   return text;
 }
 
 // ============================================================
-// CONTENT PIPELINE (kept)
+// CONTENT PIPELINE
 // ============================================================
 export async function processContentPipeline(url, options) {
   if (!options) options = {};
@@ -546,23 +575,21 @@ export async function runOrchestrator(task, context) {
   try {
     var taskType = detectTaskType(task);
 
-    // Direct report command
     if (taskType === "report") {
       var reportText = await handleReport();
       return { response: reportText, result: reportText, duration: Date.now() - start, stepsExecuted: 1, totalSteps: 1, agents: ["system"] };
     }
 
-    // pipeline command
     if (taskType === "content_pipeline") {
       var urlMatch = task.match(/https?:\/\/[^\s]+/);
       if (urlMatch) {
         var pipeResult = await processContentPipeline(urlMatch[0]);
         if (pipeResult.success) {
-          var pipeText = "📰 *Content Pipeline Complete*\n\n";
-          if (pipeResult.platforms.fb && pipeResult.platforms.fb.success) pipeText += "📘 *Facebook:*\n" + pipeResult.platforms.fb.content + "\n\n";
-          if (pipeResult.platforms.threads && pipeResult.platforms.threads.success) pipeText += "🧵 *Threads:*\n" + pipeResult.platforms.threads.content + "\n\n";
-          if (pipeResult.platforms.x && pipeResult.platforms.x.success) pipeText += "𝕏 *X/Twitter:*\n" + pipeResult.platforms.x.content + "\n\n";
-          pipeText += "\n🔗 Source: " + urlMatch[0];
+          var pipeText = "\uD83D\uDCF0 *Content Pipeline Complete*\n\n";
+          if (pipeResult.platforms.fb && pipeResult.platforms.fb.success) pipeText += "\uD83D\uDCD8 *Facebook:*\n" + pipeResult.platforms.fb.content + "\n\n";
+          if (pipeResult.platforms.threads && pipeResult.platforms.threads.success) pipeText += "\uD83E\uDDF5 *Threads:*\n" + pipeResult.platforms.threads.content + "\n\n";
+          if (pipeResult.platforms.x && pipeResult.platforms.x.success) pipeText += "\uD835\uDD4F *X/Twitter:*\n" + pipeResult.platforms.x.content + "\n\n";
+          pipeText += "\n\uD83D\uDD17 Source: " + urlMatch[0];
           return { response: pipeText, result: pipeText, duration: Date.now() - start, stepsExecuted: 1, totalSteps: 1, agents: ["content"] };
         }
         return { response: "Pipeline gagal: " + pipeResult.error, error: true };
@@ -591,14 +618,15 @@ export async function runOrchestrator(task, context) {
     var plan = await planTask(understanding, memories, task);
 
     var agentSet = {};
-    for (var p = 0; p < plan.length; p++) agentSet[plan[p].agent] = true;
+    for (var pp = 0; pp < plan.length; pp++) agentSet[plan[pp].agent] = true;
     var agents = Object.keys(agentSet);
 
     console.log("PLAN: " + plan.length + " steps, agents: " + agents.join(", "));
 
-    // STEP 4 - EXECUTION
+    // STEP 4 - EXECUTION (with lastResult pass-through)
     console.log("STEP 4: EXECUTION");
     var results = [];
+    var lastResult = null;
     var sortedPlan = plan.sort(function(a, b) { return a.step - b.step; });
 
     for (var s = 0; s < sortedPlan.length; s++) {
@@ -613,8 +641,12 @@ export async function runOrchestrator(task, context) {
         imageBase64: context.imageBase64 || null,
         originalTask: task,
         understanding: understanding,
-        from: context.from || "Telegram"
+        from: context.from || "Telegram",
+        lastResult: lastResult
       });
+
+      // Save this step's output so next step can use it
+      lastResult = result;
 
       results.push({ step: step.step, agent: step.agent, action: step.action, result: result });
       console.log("[" + step.agent + "] COMPLETE");
@@ -629,7 +661,6 @@ export async function runOrchestrator(task, context) {
     else if (results.length === 1) finalResponse = results[0].result;
     else finalResponse = await bossReview(task, results);
 
-    // SAFETY: strip JSON if accidentally returned
     var trimmed = (finalResponse || "").trim();
     if (trimmed.indexOf("[{") === 0 || trimmed.indexOf("```json") === 0 || trimmed.indexOf("```") === 0) {
       console.log("WARNING: JSON detected, regenerating...");
@@ -660,7 +691,6 @@ export async function runOrchestrator(task, context) {
   }
 }
 
-// Alternative simpler entry point
 export async function processMessage(userMessage, context) {
   return await runOrchestrator(userMessage, context);
 }
