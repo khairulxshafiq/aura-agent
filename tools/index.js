@@ -4,13 +4,28 @@
 // ============================================================
 
 // Telegram
-export { sendTelegram, sendTelegramImage, sendTelegramBase64Image, sendSmartResponse, sendTelegramTyping, getTelegramFile } from "./telegram.js";
+export {
+  sendTelegram,
+  sendTelegramImage,
+  sendTelegramBase64Image,
+  sendSmartResponse,
+  sendTelegramTyping,
+  getTelegramFile
+} from "./telegram.js";
 
-// OpenRouter (image gen keeps backward compat — returns URL string)
+// OpenRouter (keep backward compat)
 export { generateImage } from "./openRouter.js";
 
-// OpenRouter NEW exports (v4.1)
-export { chatCompletion, firecrawlSearch, openRouterAnalyzeImage, getCostReport, shouldUseFreeModel, getCredits, getUsageStats } from "./openRouter.js";
+// OpenRouter extra (if your openRouter.js exports these)
+export {
+  chatCompletion,
+  firecrawlSearch,
+  openRouterAnalyzeImage,
+  getCostReport,
+  shouldUseFreeModel,
+  getCredits,
+  getUsageStats
+} from "./openRouter.js";
 
 // Supabase
 export {
@@ -19,43 +34,58 @@ export {
   supabaseSearch,
   searchMemory,
   saveMemory,
-  logActivity,
+  logActivity
 } from "./supabase.js";
 
 // n8n
 export { triggerN8n } from "./n8n.js";
 
-// AI tools (Tavily search, research, etc)
+// AI tools (Tavily search, research, content, vision)
 export {
   callToolLLM,
   webSearch,
   research,
   analyzeImage,
   writeContent,
-  generateCaption,
+  generateCaption
 } from "./ai.js";
+
+// Airtable (NEW)
+export {
+  airtableCreate,
+  airtableUpdate,
+  airtableFindByFormula,
+  airtableGet
+} from "./airtable.js";
 
 // === Tool Map ===
 import { webSearch, research, analyzeImage, writeContent, generateCaption } from "./ai.js";
 import { generateImage } from "./openRouter.js";
-import { firecrawlSearch } from "./openRouter.js";
+import { airtableCreate, airtableUpdate, airtableFindByFormula, airtableGet } from "./airtable.js";
 
-export var TOOLS = {
-  webSearch: webSearch,
-  firecrawlSearch: firecrawlSearch,
-  research: research,
-  generateImage: generateImage,
-  analyzeImage: analyzeImage,
-  writeContent: writeContent,
-  generateCaption: generateCaption
+export const TOOLS = {
+  webSearch,
+  research,
+  generateImage,
+  analyzeImage,
+  writeContent,
+  generateCaption,
+  airtableCreate,
+  airtableUpdate,
+  airtableFindByFormula,
+  airtableGet
 };
 
-export var TOOL_DESCRIPTIONS = {
-  webSearch: "Search internet for current info, news, trends (Tavily)",
-  firecrawlSearch: "Deep web scrape via Firecrawl (OpenRouter plugin) - full page content",
-  research: "Deep AI analysis and research (Gemini)",
+export const TOOL_DESCRIPTIONS = {
+  webSearch: "Search internet for current info, news, trends",
+  research: "Deep analysis & reasoning",
   generateImage: "Create AI images via OpenRouter (Gemini Image)",
-  analyzeImage: "Analyze/read images - OCR, identify, review (Gemini Vision)",
-  writeContent: "Write professional content - articles, copies, scripts",
-  generateCaption: "Quick social media caption with hooks + hashtags"
+  analyzeImage: "Analyze/read images with AI vision",
+  writeContent: "Write long-form content (FB/IG/etc)",
+  generateCaption: "Quick caption + hooks + hashtags",
+  airtableCreate: "Create Airtable record (content staging)",
+  airtableUpdate: "Update Airtable record by recordId",
+  airtableFindByFormula: "Find Airtable records by filter formula",
+  airtableGet: "Get Airtable record by ID"
 };
+``
