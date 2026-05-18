@@ -1,6 +1,7 @@
 // ============================================================
-// AURA v4.2 — tools/index.js (FULL: Memory + All Re-exports)
-// GDrive uses DEFAULT import (same pattern as openRouter)
+// ✅ TOOLS HUB — tools/index.js (NOT ROOT)
+// AURA v4.2.x — Memory + Tool exports
+// NOTE: This is tools/index.js (not root index.js)
 // ============================================================
 
 import { createClient } from "@supabase/supabase-js";
@@ -13,10 +14,12 @@ var _sbKey =
   process.env.SUPABASE_ANON_KEY;
 
 var _sb = null;
+
 function _getDb() {
   if (!_sb && _sbUrl && _sbKey) _sb = createClient(_sbUrl, _sbKey);
   return _sb;
 }
+
 function _month() {
   var d = new Date();
   return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0");
@@ -47,29 +50,12 @@ export async function getConversationHistory(chatId, limit) {
       .eq("chat_id", String(chatId))
       .order("created_at", { ascending: false })
       .limit(limit || 10);
+
     return r.data
       ? r.data.reverse().map(function (x) {
           return { role: x.role, content: x.message };
         })
       : [];
-  } catch (e) {
-    return [];
-  }
-}
-
-export async function getMonthlyRecall(chatId, monthYear) {
-  var db = _getDb();
-  if (!db) return [];
-  try {
-    var r = await db
-      .from("aura_conversations")
-      .select("role, message, created_at")
-      .eq("chat_id", String(chatId))
-      .eq("month_year", monthYear || _month())
-      .eq("role", "user")
-      .order("created_at", { ascending: true })
-      .limit(50);
-    return r.data || [];
   } catch (e) {
     return [];
   }
@@ -102,6 +88,7 @@ export async function getPreferences(chatId) {
       .from("aura_preferences")
       .select("pref_key, pref_value")
       .eq("chat_id", String(chatId));
+
     var p = {};
     if (r.data)
       r.data.forEach(function (x) {
@@ -124,37 +111,7 @@ export function detectFeedback(message) {
     f.push({ key: "tone", value: "more_natural" });
   if (msg.includes("tak nak emoji"))
     f.push({ key: "emoji_usage", value: "minimal" });
-  if (msg.includes("cun") || msg.includes("perfect") || msg.includes("nice"))
-    f.push({ key: "last_positive", value: "approved" });
   return f;
-}
-
-export async function saveKnowledge(category, title, content, source) {
-  var db = _getDb();
-  if (!db) return;
-  try {
-    await db.from("aura_knowledge").insert({
-      category,
-      title,
-      content: (content || "").substring(0, 5000),
-      source,
-    });
-  } catch (e) {
-    console.error("[Memory] saveKnowledge:", e.message);
-  }
-}
-
-export async function queryKnowledge(searchTerm, category) {
-  var db = _getDb();
-  if (!db) return [];
-  try {
-    var q = db.from("aura_knowledge").select("*");
-    if (category) q = q.eq("category", category);
-    var r = await q.ilike("title", "%" + searchTerm + "%").limit(5);
-    return r.data || [];
-  } catch (e) {
-    return [];
-  }
 }
 
 export async function buildContext(chatId) {
@@ -175,7 +132,8 @@ export {
   sendTelegramBase64Image,
   sendSmartResponse,
   sendTelegramTyping,
-  getTelegramFile,
+  downloadTelegramFile,
+  getTelegramFile
 } from "./telegram.js";
 
 // ── Supabase ──────────────────────────────────────────────
@@ -187,9 +145,6 @@ export {
   saveMemory,
   logActivity,
 } from "./supabase.js";
-
-// ── n8n ───────────────────────────────────────────────────
-export { triggerN8n } from "./n8n.js";
 
 // ── AI tools ──────────────────────────────────────────────
 export {
@@ -209,13 +164,6 @@ export {
   airtableGet,
 } from "./airtable.js";
 
-// ── GDrive (DEFAULT import — bulletproof, same as openRouter) ──
-import _gd from "./gdrive.js";
-export var uploadImageToGDrive = _gd.uploadImageToGDrive;
-export var downloadAndUploadToGDrive = _gd.downloadAndUploadToGDrive;
-export var testGDrive = _gd.testGDrive;
-export var uploadTestImage = _gd.uploadTestImage;
-
 // ── OpenRouter (ALL via default import) ───────────────────
 import _or from "./openRouter.js";
 export var generateImage = _or.generateImage;
@@ -227,6 +175,21 @@ export var shouldUseFreeModel = _or.shouldUseFreeModel;
 export var getCredits = _or.getCredits;
 export var getUsageStats = _or.getUsageStats;
 
+// ── GDrive (DEFAULT import — NEVER named import here) ──────
+import _gd from "./gdrive.js";
+
+// if missing, keep server alive but throw when called
+function _missing(name) {
+  return async function () {
+    throw new Error("[GDrive] Function missing: " + name + " (check tools/gdrive.js exports)");
+  };
+}
+
+export var uploadImageToGDrive = _gd.uploadImageToGDrive || _missing("uploadImageToGDrive");
+export var downloadAndUploadToGDrive = _gd.downloadAndUploadToGDrive || _missing("downloadAndUploadToGDrive");
+export var testGDrive = _gd.testGDrive || _missing("testGDrive");
+export var uploadTestImage = _gd.uploadTestImage || _missing("uploadTestImage");
+
 // ── Tool Map ──────────────────────────────────────────────
 import {
   webSearch as _ws,
@@ -235,16 +198,13 @@ import {
   writeContent as _wc,
   generateCaption as _gc,
 } from "./ai.js";
+
 import {
   airtableCreate as _ac,
   airtableUpdate as _au,
   airtableFindByFormula as _af,
   airtableGet as _ag,
 } from "./airtable.js";
-
-// GDrive for TOOLS map uses default import _gd (already imported above)
-var _ug = _gd.uploadImageToGDrive;
-var _dg = _gd.downloadAndUploadToGDrive;
 
 export var TOOLS = {
   webSearch: _ws,
@@ -257,8 +217,8 @@ export var TOOLS = {
   airtableUpdate: _au,
   airtableFindByFormula: _af,
   airtableGet: _ag,
-  uploadImageToGDrive: _ug,
-  downloadAndUploadToGDrive: _dg,
+  uploadImageToGDrive: uploadImageToGDrive,
+  downloadAndUploadToGDrive: downloadAndUploadToGDrive,
 };
 
 export var TOOL_DESCRIPTIONS = {
