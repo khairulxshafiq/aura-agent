@@ -1,8 +1,3 @@
-// ============================================================
-// AURA v4.1 — Memory System (Conversations + Preferences + Knowledge)
-// File: tools/memory.js (REPLACES old memory/memory.js)
-// ============================================================
-
 import { createClient } from "@supabase/supabase-js";
 
 var SUPABASE_URL = process.env.SUPABASE_URL;
@@ -21,149 +16,84 @@ function getMonthYear() {
   return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0");
 }
 
-// ============================================================
-// CONVERSATIONS — Save & Recall
-// ============================================================
-
 export async function saveConversation(chatId, role, message) {
   var db = getClient();
   if (!db || !message) return;
   try {
     await db.from("aura_conversations").insert({
-      chat_id: String(chatId),
-      role: role,
+      chat_id: String(chatId), role: role,
       message: (message || "").substring(0, 5000),
       month_year: getMonthYear()
     });
-  } catch (err) {
-    console.error("[Memory] saveConversation error:", err.message);
-  }
+  } catch (err) { console.error("[Memory] saveConversation:", err.message); }
 }
 
 export async function getConversationHistory(chatId, limit) {
   var db = getClient();
   if (!db) return [];
-  if (!limit) limit = 10;
   try {
     var resp = await db.from("aura_conversations")
       .select("role, message, created_at")
       .eq("chat_id", String(chatId))
       .order("created_at", { ascending: false })
-      .limit(limit);
-    if (resp.data) {
-      return resp.data.reverse().map(function(r) {
-        return { role: r.role, content: r.message };
-      });
-    }
-    return [];
-  } catch (err) {
-    console.error("[Memory] getHistory error:", err.message);
-    return [];
-  }
+      .limit(limit || 10);
+    return resp.data ? resp.data.reverse().map(function(r) { return { role: r.role, content: r.message }; }) : [];
+  } catch (err) { return []; }
 }
 
 export async function getMonthlyRecall(chatId, monthYear) {
   var db = getClient();
   if (!db) return [];
-  if (!monthYear) monthYear = getMonthYear();
   try {
     var resp = await db.from("aura_conversations")
       .select("role, message, created_at")
       .eq("chat_id", String(chatId))
-      .eq("month_year", monthYear)
+      .eq("month_year", monthYear || getMonthYear())
       .eq("role", "user")
-      .order("created_at", { ascending: true })
-      .limit(50);
+      .order("created_at", { ascending: true }).limit(50);
     return resp.data || [];
-  } catch (err) {
-    console.error("[Memory] monthlyRecall error:", err.message);
-    return [];
-  }
+  } catch (err) { return []; }
 }
-
-// ============================================================
-// PREFERENCES — Auto-learned from feedback
-// ============================================================
 
 export async function savePreference(chatId, key, value, learnedFrom) {
   var db = getClient();
   if (!db) return;
   try {
     await db.from("aura_preferences").upsert({
-      chat_id: String(chatId),
-      pref_key: key,
-      pref_value: value,
+      chat_id: String(chatId), pref_key: key, pref_value: value,
       learned_from: (learnedFrom || "").substring(0, 500),
       updated_at: new Date().toISOString()
     }, { onConflict: "chat_id,pref_key" });
-    console.log("[Memory] Preference saved: " + key + " = " + value);
-  } catch (err) {
-    console.error("[Memory] savePreference error:", err.message);
-  }
+  } catch (err) { console.error("[Memory] savePreference:", err.message); }
 }
 
 export async function getPreferences(chatId) {
   var db = getClient();
   if (!db) return {};
   try {
-    var resp = await db.from("aura_preferences")
-      .select("pref_key, pref_value")
-      .eq("chat_id", String(chatId));
+    var resp = await db.from("aura_preferences").select("pref_key, pref_value").eq("chat_id", String(chatId));
     var prefs = {};
-    if (resp.data) {
-      resp.data.forEach(function(r) { prefs[r.pref_key] = r.pref_value; });
-    }
+    if (resp.data) resp.data.forEach(function(r) { prefs[r.pref_key] = r.pref_value; });
     return prefs;
-  } catch (err) {
-    console.error("[Memory] getPreferences error:", err.message);
-    return {};
-  }
+  } catch (err) { return {}; }
 }
 
-// Detect feedback patterns from user message
 export function detectFeedback(message) {
   var msg = (message || "").toLowerCase();
   var feedback = [];
-
-  if (msg.includes("terlalu panjang") || msg.includes("too long") || msg.includes("pendekkan")) {
-    feedback.push({ key: "content_length", value: "shorter" });
-  }
-  if (msg.includes("lagi detail") || msg.includes("panjangkan") || msg.includes("more detail")) {
-    feedback.push({ key: "content_length", value: "longer" });
-  }
-  if (msg.includes("cringe") || msg.includes("tak natural") || msg.includes("macam ai")) {
-    feedback.push({ key: "tone", value: "more_natural" });
-  }
-  if (msg.includes("tak nak emoji") || msg.includes("kurang emoji") || msg.includes("no emoji")) {
-    feedback.push({ key: "emoji_usage", value: "minimal" });
-  }
-  if (msg.includes("cun") || msg.includes("perfect") || msg.includes("okay macam ni") || msg.includes("nice")) {
-    feedback.push({ key: "last_positive", value: "approved" });
-  }
-  if (msg.includes("jangan") || msg.includes("taknak") || msg.includes("dont")) {
-    feedback.push({ key: "negative_feedback", value: msg.substring(0, 200) });
-  }
-
+  if (msg.includes("terlalu panjang") || msg.includes("pendekkan")) feedback.push({ key: "content_length", value: "shorter" });
+  if (msg.includes("lagi detail") || msg.includes("panjangkan")) feedback.push({ key: "content_length", value: "longer" });
+  if (msg.includes("cringe") || msg.includes("macam ai")) feedback.push({ key: "tone", value: "more_natural" });
+  if (msg.includes("tak nak emoji") || msg.includes("kurang emoji")) feedback.push({ key: "emoji_usage", value: "minimal" });
+  if (msg.includes("cun") || msg.includes("perfect") || msg.includes("nice")) feedback.push({ key: "last_positive", value: "approved" });
   return feedback;
 }
-
-// ============================================================
-// KNOWLEDGE — Facts, decisions, events
-// ============================================================
 
 export async function saveKnowledge(category, title, content, source) {
   var db = getClient();
   if (!db) return;
-  try {
-    await db.from("aura_knowledge").insert({
-      category: category,
-      title: title,
-      content: (content || "").substring(0, 5000),
-      source: source
-    });
-  } catch (err) {
-    console.error("[Memory] saveKnowledge error:", err.message);
-  }
+  try { await db.from("aura_knowledge").insert({ category, title, content: (content || "").substring(0, 5000), source }); }
+  catch (err) { console.error("[Memory] saveKnowledge:", err.message); }
 }
 
 export async function queryKnowledge(searchTerm, category) {
@@ -172,37 +102,20 @@ export async function queryKnowledge(searchTerm, category) {
   try {
     var q = db.from("aura_knowledge").select("*");
     if (category) q = q.eq("category", category);
-    q = q.ilike("title", "%" + searchTerm + "%").limit(5);
-    var resp = await q;
+    var resp = await q.ilike("title", "%" + searchTerm + "%").limit(5);
     return resp.data || [];
-  } catch (err) {
-    console.error("[Memory] queryKnowledge error:", err.message);
-    return [];
-  }
+  } catch (err) { return []; }
 }
-
-// ============================================================
-// CONTEXT BUILDER — Builds prompt context from memory
-// ============================================================
 
 export async function buildContext(chatId, currentMessage) {
   var history = await getConversationHistory(chatId, 8);
   var prefs = await getPreferences(chatId);
-
-  // Build preferences string
   var prefString = "";
   if (Object.keys(prefs).length > 0) {
-    prefString = "\n\nUSER PREFERENCES (learned from past feedback):\n";
-    for (var k in prefs) {
-      prefString += "- " + k + ": " + prefs[k] + "\n";
-    }
+    prefString = "\n\nUSER PREFERENCES:\n";
+    for (var k in prefs) prefString += "- " + k + ": " + prefs[k] + "\n";
   }
-
-  return {
-    history: history,
-    preferences: prefs,
-    prefString: prefString
-  };
+  return { history: history, preferences: prefs, prefString: prefString };
 }
 
 export default {
