@@ -1,5 +1,6 @@
 // ============================================================
-// AURA v4.1 — tools/index.js (FULL: Memory + All Re-exports)
+// AURA v4.2 — tools/index.js (FULL: Memory + All Re-exports)
+// GDrive uses DEFAULT import (same pattern as openRouter)
 // ============================================================
 
 import { createClient } from "@supabase/supabase-js";
@@ -208,11 +209,12 @@ export {
   airtableGet,
 } from "./airtable.js";
 
-// ── GDrive ────────────────────────────────────────────────
-export {
-  uploadImageToGDrive,
-  downloadAndUploadToGDrive,
-} from "./gdrive.js";
+// ── GDrive (DEFAULT import — bulletproof, same as openRouter) ──
+import _gd from "./gdrive.js";
+export var uploadImageToGDrive = _gd.uploadImageToGDrive;
+export var downloadAndUploadToGDrive = _gd.downloadAndUploadToGDrive;
+export var testGDrive = _gd.testGDrive;
+export var uploadTestImage = _gd.uploadTestImage;
 
 // ── OpenRouter (ALL via default import) ───────────────────
 import _or from "./openRouter.js";
@@ -239,10 +241,10 @@ import {
   airtableFindByFormula as _af,
   airtableGet as _ag,
 } from "./airtable.js";
-import {
-  uploadImageToGDrive as _ug,
-  downloadAndUploadToGDrive as _dg,
-} from "./gdrive.js";
+
+// GDrive for TOOLS map uses default import _gd (already imported above)
+var _ug = _gd.uploadImageToGDrive;
+var _dg = _gd.downloadAndUploadToGDrive;
 
 export var TOOLS = {
   webSearch: _ws,
