@@ -541,6 +541,20 @@ export async function runOrchestrator(task, context) {
   var start = Date.now();
   var chatId = context.chatId || "default";
 
+    // ===== MEMTEST (debug) =====
+    if ((task || "").trim().toLowerCase().startsWith("/memtest")) {
+      var mq = (task || "").replace(/\/memtest/i, "").trim() || ("test-" + Date.now());
+      await saveMemory("memtest:" + mq, "MEMTEST_OK:" + new Date().toISOString(), chatId);
+      var mfound = await searchMemory(mq, chatId);
+      var mtop = (mfound && mfound[0])
+        ? ("Top: " + (mfound[0].task || "") + " | " + (mfound[0].result || "").substring(0, 80))
+        : "Top: (tiada)";
+      var mmsg = "\uD83E\uDDE0 MEMTEST OK\nQuery: " + mq + "\nFound: " + (mfound ? mfound.length : 0) + "\n" + mtop;
+      await saveConversation(chatId, "assistant", mmsg);
+      return { response: mmsg, result: mmsg };
+    }
+
+
   console.log("\n=================================");
   console.log("AURA v4.1.0 | " + task.substring(0, 80));
   console.log("=================================");
@@ -600,7 +614,7 @@ export async function runOrchestrator(task, context) {
     var understanding = isCasualMessage(task) ? "Borak biasa." : await callLLM(understandingPrompt, "Ringkaskan apa user nak (1 ayat BM).\nMessage: " + task, task, history);
 
     console.log("STEP 2: MEMORY");
-    var memories = await searchMemory(task);
+    var memories = await searchMemory(task, chatId);
 
     console.log("STEP 3: PLANNING");
     var plan = await planTask(understanding, memories, task, history);
@@ -688,7 +702,7 @@ export async function runOrchestrator(task, context) {
     finalResponse = sanitizePersona(finalResponse);
 
     console.log("STEP 6: MEMORY");
-    await saveMemory(task, finalResponse);
+    await saveMemory(task, finalResponse, chatId);
     await logActivity("orchestrator", task, finalResponse, "success");
     await saveConversation(chatId, "assistant", (finalResponse || "").substring(0, 2000));
 
