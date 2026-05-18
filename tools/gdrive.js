@@ -1,8 +1,6 @@
 // ============================================================
 // AURA v4.1 — Google Drive File Manager
 // File: tools/gdrive.js
-// Handles: base64 upload, URL download+upload, public sharing
-// All files go to "Dump File" folder
 // ============================================================
 
 import axios from "axios";
@@ -57,7 +55,7 @@ async function getAccessToken() {
 }
 
 // ============================================================
-// Upload raw buffer to GDrive
+// Upload raw buffer to GDrive (internal helper)
 // ============================================================
 async function uploadBufferToGDrive(imageBuffer, mimeType, fileName, token) {
   if (!FOLDER_ID) throw new Error("GDRIVE_FOLDER_ID not configured");
@@ -119,3 +117,76 @@ async function uploadBufferToGDrive(imageBuffer, mimeType, fileName, token) {
 
 // ============================================================
 // Upload base64 image to GDrive
+// ============================================================
+export async function uploadImageToGDrive(base64DataUri, fileName) {
+  try {
+    if (!fileName) fileName = "aura_" + Date.now() + ".png";
+
+    var token = await getAccessToken();
+
+    // Strip data URI prefix
+    var base64Data = base64DataUri;
+    var commaIndex = base64DataUri.indexOf(",");
+    if (commaIndex > -1) {
+      base64Data = base64DataUri.substring(commaIndex + 1);
+    }
+
+    // Detect mime type
+    var mimeType = "image/png";
+    if (base64DataUri.indexOf("image/jpeg") > -1) mimeType = "image/jpeg";
+    else if (base64DataUri.indexOf("image/webp") > -1) mimeType = "image/webp";
+    else if (base64DataUri.indexOf("image/gif") > -1) mimeType = "image/gif";
+
+    var imageBuffer = Buffer.from(base64Data, "base64");
+    console.log("[GDrive] uploadImageToGDrive: " + Math.round(imageBuffer.length / 1024) + "KB");
+
+    return await uploadBufferToGDrive(imageBuffer, mimeType, fileName, token);
+
+  } catch (err) {
+    console.error("[GDrive] uploadImageToGDrive failed:", err.message);
+    return { success: false, error: err.message };
+  }
+}
+
+// ============================================================
+// Download image from URL + upload to GDrive
+// ============================================================
+export async function downloadAndUploadToGDrive(imageUrl, fileName) {
+  try {
+    if (!fileName) fileName = "aura_dl_" + Date.now() + ".png";
+
+    console.log("[GDrive] Downloading: " + imageUrl.substring(0, 80));
+
+    var token = await getAccessToken();
+
+    // Download the image
+    var resp = await axios.get(imageUrl, {
+      responseType: "arraybuffer",
+      timeout: 30000,
+      headers: {
+        "User-Agent": "Mozilla/5.0 (compatible; AuraBot/1.0)"
+      }
+    });
+
+    var imageBuffer = Buffer.from(resp.data);
+    var contentType = resp.headers["content-type"] || "image/png";
+
+    // Determine file extension from content type
+    var extMap = {
+      "image/jpeg": ".jpg",
+      "image/png": ".png",
+      "image/webp": ".webp",
+      "image/gif": ".gif"
+    };
+    var ext = extMap[contentType] || ".png";
+    if (!fileName.includes(".")) fileName += ext;
+
+    console.log("[GDrive] Downloaded: " + Math.round(imageBuffer.length / 1024) + "KB | " + contentType);
+
+    return await uploadBufferToGDrive(imageBuffer, contentType, fileName, token);
+
+  } catch (err) {
+    console.error("[GDrive] downloadAndUploadToGDrive failed:", err.message);
+    return { success: false, error: err.message };
+  }
+}
