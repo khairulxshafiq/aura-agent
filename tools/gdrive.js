@@ -180,4 +180,4 @@ export async function uploadTestImage() {
   return await uploadImageToGDrive(TINY_PNG, `aura_img_test_${Date.now()}.png`);
 }
 
-export default { uploadImageToGDrive, testGDrive, uploadTestImage };
+export default { uploadImageToGDrive, downloadAndUploadToGDrive, testGDrive, uploadTestImage };
