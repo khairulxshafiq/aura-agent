@@ -1,6 +1,5 @@
 // ============================================================
-// AURA v4.1 — tools/index.js (PATCHED MEMORY KEY)
-// Only change: prefer SUPABASE_SERVICE_ROLE_KEY for server-side writes
+// AURA v4.1 — tools/index.js (FULL: Memory + All Re-exports)
 // ============================================================
 
 import { createClient } from "@supabase/supabase-js";
@@ -15,14 +14,8 @@ var _sbKey =
 var _sb = null;
 function _getDb() {
   if (!_sb && _sbUrl && _sbKey) _sb = createClient(_sbUrl, _sbKey);
-  if (!_sb) {
-    console.warn(
-      "[Memory] Supabase client not initialized. Set SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY (recommended)."
-    );
-  }
   return _sb;
 }
-
 function _month() {
   var d = new Date();
   return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0");
@@ -53,14 +46,12 @@ export async function getConversationHistory(chatId, limit) {
       .eq("chat_id", String(chatId))
       .order("created_at", { ascending: false })
       .limit(limit || 10);
-
     return r.data
       ? r.data.reverse().map(function (x) {
           return { role: x.role, content: x.message };
         })
       : [];
   } catch (e) {
-    console.error("[Memory] getConversationHistory:", e.message);
     return [];
   }
 }
@@ -77,10 +68,8 @@ export async function getMonthlyRecall(chatId, monthYear) {
       .eq("role", "user")
       .order("created_at", { ascending: true })
       .limit(50);
-
     return r.data || [];
   } catch (e) {
-    console.error("[Memory] getMonthlyRecall:", e.message);
     return [];
   }
 }
@@ -112,14 +101,13 @@ export async function getPreferences(chatId) {
       .from("aura_preferences")
       .select("pref_key, pref_value")
       .eq("chat_id", String(chatId));
-
     var p = {};
-    if (r.data) r.data.forEach(function (x) {
-      p[x.pref_key] = x.pref_value;
-    });
+    if (r.data)
+      r.data.forEach(function (x) {
+        p[x.pref_key] = x.pref_value;
+      });
     return p;
   } catch (e) {
-    console.error("[Memory] getPreferences:", e.message);
     return {};
   }
 }
@@ -164,7 +152,6 @@ export async function queryKnowledge(searchTerm, category) {
     var r = await q.ilike("title", "%" + searchTerm + "%").limit(5);
     return r.data || [];
   } catch (e) {
-    console.error("[Memory] queryKnowledge:", e.message);
     return [];
   }
 }
@@ -173,15 +160,116 @@ export async function buildContext(chatId) {
   var history = await getConversationHistory(chatId, 8);
   var prefs = await getPreferences(chatId);
   var prefString = "";
-
   if (Object.keys(prefs).length > 0) {
     prefString = "\n\nUSER PREFERENCES:\n";
     for (var k in prefs) prefString += "- " + k + ": " + prefs[k] + "\n";
   }
-
   return { history, preferences: prefs, prefString };
 }
 
-// NOTE:
-// The rest of your existing exports (telegram/supabase/airtable/gdrive/openRouter/tools map)
-// should remain as in your current tools/index.js.
+// ── Telegram ──────────────────────────────────────────────
+export {
+  sendTelegram,
+  sendTelegramImage,
+  sendTelegramBase64Image,
+  sendSmartResponse,
+  sendTelegramTyping,
+  getTelegramFile,
+} from "./telegram.js";
+
+// ── Supabase ──────────────────────────────────────────────
+export {
+  supabaseQuery,
+  supabaseInsert,
+  supabaseSearch,
+  searchMemory,
+  saveMemory,
+  logActivity,
+} from "./supabase.js";
+
+// ── n8n ───────────────────────────────────────────────────
+export { triggerN8n } from "./n8n.js";
+
+// ── AI tools ──────────────────────────────────────────────
+export {
+  callToolLLM,
+  webSearch,
+  research,
+  analyzeImage,
+  writeContent,
+  generateCaption,
+} from "./ai.js";
+
+// ── Airtable ──────────────────────────────────────────────
+export {
+  airtableCreate,
+  airtableUpdate,
+  airtableFindByFormula,
+  airtableGet,
+} from "./airtable.js";
+
+// ── GDrive ────────────────────────────────────────────────
+export {
+  uploadImageToGDrive,
+  downloadAndUploadToGDrive,
+} from "./gdrive.js";
+
+// ── OpenRouter (ALL via default import) ───────────────────
+import _or from "./openRouter.js";
+export var generateImage = _or.generateImage;
+export var chatCompletion = _or.chatCompletion;
+export var firecrawlSearch = _or.firecrawlSearch;
+export var openRouterAnalyzeImage = _or.openRouterAnalyzeImage;
+export var getCostReport = _or.getCostReport;
+export var shouldUseFreeModel = _or.shouldUseFreeModel;
+export var getCredits = _or.getCredits;
+export var getUsageStats = _or.getUsageStats;
+
+// ── Tool Map ──────────────────────────────────────────────
+import {
+  webSearch as _ws,
+  research as _rs,
+  analyzeImage as _ai,
+  writeContent as _wc,
+  generateCaption as _gc,
+} from "./ai.js";
+import {
+  airtableCreate as _ac,
+  airtableUpdate as _au,
+  airtableFindByFormula as _af,
+  airtableGet as _ag,
+} from "./airtable.js";
+import {
+  uploadImageToGDrive as _ug,
+  downloadAndUploadToGDrive as _dg,
+} from "./gdrive.js";
+
+export var TOOLS = {
+  webSearch: _ws,
+  research: _rs,
+  generateImage: _or.generateImage,
+  analyzeImage: _ai,
+  writeContent: _wc,
+  generateCaption: _gc,
+  airtableCreate: _ac,
+  airtableUpdate: _au,
+  airtableFindByFormula: _af,
+  airtableGet: _ag,
+  uploadImageToGDrive: _ug,
+  downloadAndUploadToGDrive: _dg,
+};
+
+export var TOOL_DESCRIPTIONS = {
+  webSearch: "Search internet",
+  research: "Deep analysis",
+  generateImage: "Create AI images",
+  analyzeImage: "Analyze images",
+  writeContent: "Write content",
+  generateCaption: "Quick caption + hashtags",
+  airtableCreate: "Save draft to Airtable",
+  airtableUpdate: "Update Airtable record",
+  airtableFindByFormula: "Find Airtable records",
+  airtableGet: "Get Airtable record",
+  uploadImageToGDrive: "Upload image to GDrive",
+  downloadAndUploadToGDrive: "Download + upload to GDrive",
+};
