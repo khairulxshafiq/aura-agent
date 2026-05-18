@@ -14,15 +14,11 @@ import {
   searchMemory, saveMemory, logActivity, callToolLLM,
   airtableCreate, airtableUpdate, airtableFindByFormula, airtableGet,
   sendTelegramImage, sendTelegramBase64Image,
-  uploadImageToGDrive,
+  uploadImageToGDrive, downloadAndUploadToGDrive,
   saveConversation, getConversationHistory, getPreferences, savePreference, detectFeedback, buildContext
 } from "./tools/index.js";
 
 var OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
-
-// ============================================================
-// HELPERS
-// ============================================================
 
 function extractSmartTitle(caption, originalTask) {
   if (!caption) return (originalTask || "Untitled").substring(0, 80);
@@ -55,15 +51,10 @@ function extractImageUrl(text) {
   return null;
 }
 
-// Cost-aware token limits per task type
 function getMaxTokens(taskType) {
   var limits = { simple_chat: 500, content: 1500, coding: 3000, research: 2000, finance: 1500, image: 500, report: 500 };
   return limits[taskType] || 1500;
 }
-
-// ============================================================
-// PROMPTS
-// ============================================================
 
 var BOSS_PLAN_PROMPT =
   "You are AURA - Matrol personal AI assistant.\n\n" +
@@ -132,10 +123,6 @@ var AGENT_ROLES = {
   architect: "AURA Architect agent. NEVER return JSON."
 };
 
-// ============================================================
-// CORE FUNCTIONS
-// ============================================================
-
 export function detectTaskType(message) {
   var msg = (message || "").toLowerCase();
   if (msg.includes("/report") || msg.includes("/usage") || msg.includes("/cost")) return "report";
@@ -161,32 +148,16 @@ async function callLLM(systemPrompt, userMessage, taskType, history) {
   if (!taskType) taskType = "general";
   var selected = chooseModel(taskType);
   var maxTokens = getMaxTokens(taskType);
-
   console.log("\n=== MODEL: " + selected.model + " | Tokens: " + maxTokens + " ===");
-
-  // Build messages with conversation history
   var messages = [];
-  if (history && history.length > 0) {
-    // Only last 5 messages for cost savings
-    messages = history.slice(-5);
-  }
+  if (history && history.length > 0) messages = history.slice(-5);
   messages.push({ role: "user", content: userMessage });
-
-  var result = await chatCompletion({
-    model: selected.model,
-    messages: messages,
-    systemPrompt: systemPrompt,
-    temperature: 0.7,
-    maxTokens: maxTokens
-  });
-
+  var result = await chatCompletion({ model: selected.model, messages: messages, systemPrompt: systemPrompt, temperature: 0.7, maxTokens: maxTokens });
   if (result.success) return result.content;
-
   if (result.suggestFallback || result.error === "RATE_LIMIT") {
     var fb = await chatCompletion({ model: "google/gemini-2.5-flash", messages: messages, systemPrompt: systemPrompt, temperature: 0.7, maxTokens: maxTokens });
     if (fb.success) return fb.content;
   }
-
   console.error("LLM FAILED: " + result.error);
   return "Eh sorry, technical issue jap. Cuba lagi!";
 }
@@ -207,7 +178,6 @@ async function executeWithTools(agentName, action, params, context) {
   var a = (action || "").toLowerCase();
   console.log("\n--- AGENT: " + agentName + " | ACTION: " + action + " ---");
 
-  // IMAGE ANALYSIS
   if (a.includes("use analyzeimage") || a.includes("analyze image") || a.includes("analyzeimage") || a.includes("analisis gambar")) {
     var imageInput = (context && context.imageBase64) || params.imageUrl || params.url || "";
     var question = params.question || (context && context.originalTask) || "Analyze this image.";
@@ -216,7 +186,6 @@ async function executeWithTools(agentName, action, params, context) {
     return await analyzeImage(imageInput, question);
   }
 
-  // WEB SEARCH
   if (a.includes("use websearch") || a.includes("websearch") || a.includes("search internet") || a.includes("cari info")) {
     var q = params.query || params.topic || (context && context.originalTask) || action;
     console.log("[Engine] webSearch: " + q);
@@ -226,12 +195,10 @@ async function executeWithTools(agentName, action, params, context) {
     return "Search Results:\n" + ((r && r.answer) || "No results");
   }
 
-  // RESEARCH
   if (a.includes("use research") || a.includes("deep analysis")) {
     return await research(params.topic || (context && context.originalTask) || action);
   }
 
-  // IMAGE GENERATION (with GDrive upload)
   if (a.includes("use generateimage") || a.includes("generateimage") || a.includes("buat gambar") || a.includes("create image") || a.includes("generate image")) {
     var imgPrompt = params.prompt || params.description || action.replace(/use generateimage:?\s*/i, "").replace(/generateimage:?\s*/i, "");
     if (imgPrompt.length < 20 && context && context.originalTask) {
@@ -239,9 +206,7 @@ async function executeWithTools(agentName, action, params, context) {
     }
     console.log("IMAGE GENERATION: " + imgPrompt);
     var imgUrl = await generateImage(imgPrompt, { width: 1024, height: 1024 });
-
     if (imgUrl) {
-      // If base64 -> try upload to GDrive for proper URL
       if (imgUrl.startsWith("data:image")) {
         console.log("[Image] Base64 detected, uploading to GDrive...");
         try {
@@ -253,7 +218,6 @@ async function executeWithTools(agentName, action, params, context) {
         } catch (gdErr) {
           console.error("[Image] GDrive failed: " + gdErr.message);
         }
-        // GDrive failed -> return base64 marker for Telegram fallback
         return "IMAGE_BASE64:" + imgUrl;
       }
       return "IMAGE_URL:" + imgUrl;
@@ -261,17 +225,14 @@ async function executeWithTools(agentName, action, params, context) {
     return "Gambar tak berjaya. Cuba lagi?";
   }
 
-  // WRITE CONTENT
   if (a.includes("use writecontent") || a.includes("writecontent") || a.includes("tulis artikel")) {
     return await writeContent(params.brief || (context && context.originalTask) || action, params.style || "casual", params.platform || "general");
   }
 
-  // CAPTION
   if (a.includes("use generatecaption") || a.includes("generatecaption") || a.includes("buat caption")) {
     return await generateCaption(params.topic || (context && context.originalTask) || action, params.platform || "facebook", params.mood || "engaging");
   }
 
-  // CONTENT PIPELINE
   if (a.includes("use contentpipeline") || a.includes("contentpipeline") || a.includes("content pipeline")) {
     var pipeUrl = params.url || action.match(/https?:\/\/[^\s]+/);
     if (pipeUrl) {
@@ -290,10 +251,8 @@ async function executeWithTools(agentName, action, params, context) {
     return "Sila bagi URL.";
   }
 
-  // AIRTABLE CREATE
   if (a.includes("use airtablecreate") || a.includes("airtablecreate") || a.includes("save to airtable") || a.includes("airtable create")) {
     console.log("[Engine] airtableCreate");
-
     var captionValue = params.caption || params.Caption || "";
     if (!captionValue && context && context.captionFromStep1) captionValue = context.captionFromStep1;
     if (!captionValue && context && context.lastResult && typeof context.lastResult === "string" && context.lastResult.length > 50 && !context.lastResult.startsWith("IMAGE_") && !context.lastResult.startsWith("Gambar")) captionValue = context.lastResult;
@@ -338,7 +297,6 @@ async function executeWithTools(agentName, action, params, context) {
     }
   }
 
-  // AIRTABLE UPDATE
   if (a.includes("use airtableupdate") || a.includes("airtableupdate") || a.includes("airtable update")) {
     var recordId = params.recordId || params.id;
     if (!recordId) return "\u274C perlukan recordId.";
@@ -346,7 +304,6 @@ async function executeWithTools(agentName, action, params, context) {
     catch (e) { return "\u274C Update failed: " + e.message; }
   }
 
-  // AIRTABLE FIND
   if (a.includes("use airtablefindbyformula") || a.includes("airtablefindbyformula") || a.includes("find latest draft")) {
     try {
       var res = await airtableFindByFormula('{Status}="Draft"', { maxRecords: 1 });
@@ -355,7 +312,6 @@ async function executeWithTools(agentName, action, params, context) {
     } catch (e) { return "\u274C Find failed: " + e.message; }
   }
 
-  // LLM FALLBACK
   console.log("[Engine] LLM fallback");
   var role = AGENT_ROLES[agentName] || "Helpful assistant. Casual Malay. NEVER return JSON.";
   return await callLLM(role, "TASK: " + action + (context && context.originalTask ? "\nOriginal: " + context.originalTask : "") + "\nReply casual Malay. No JSON.", action, context && context.history);
@@ -396,7 +352,7 @@ async function handleReport() {
 }
 
 // ============================================================
-// CONTENT PIPELINE
+// CONTENT PIPELINE (with GDrive re-host for article images)
 // ============================================================
 
 export async function processContentPipeline(url, options) {
@@ -413,7 +369,7 @@ export async function processContentPipeline(url, options) {
 
   var fullResponse = scrape.content || "";
   var articleImage = extractImageUrl(fullResponse);
-  if (articleImage) console.log("[Pipeline] Image: " + articleImage.substring(0, 80));
+  if (articleImage) console.log("[Pipeline] Image found: " + articleImage.substring(0, 80));
 
   var articleContent = fullResponse.replace(/IMAGE_URL:\s*https?:\/\/[^\s\n]+/i, "").replace(/^CONTENT:\s*/im, "").trim();
 
@@ -428,14 +384,39 @@ export async function processContentPipeline(url, options) {
   // Auto-save to Airtable
   var bestCaption = (results.fb && results.fb.success) ? results.fb.content : "";
   if (bestCaption) {
-    var cleaned = {
+    var airtableFields = {
       "Title": extractSmartTitle(bestCaption, url),
       "Caption": bestCaption, "Platform": "Facebook", "Status": "Draft",
       "Created By": "AURA Pipeline", "Content Type": articleImage ? "Image" : "Post",
       "AI Caption": bestCaption, "AI Hashtags": extractHashtags(bestCaption),
       "AI Content Insights": "Source: " + url, "Hashtags": extractHashtags(bestCaption), "Brand": brand
     };
-    if (articleImage) { cleaned["Image URL"] = articleImage; cleaned["Image file"] = [{ url: articleImage }]; }
+
+    // ✅ Re-host article image to GDrive (bypass hotlink protection)
+    if (articleImage) {
+      try {
+        var gdResult = await downloadAndUploadToGDrive(articleImage);
+        if (gdResult.success) {
+          console.log("[Pipeline] Image re-hosted to GDrive: " + gdResult.url);
+          airtableFields["Image URL"] = gdResult.url;
+          airtableFields["Image file"] = [{ url: gdResult.url }];
+        } else {
+          console.log("[Pipeline] GDrive failed, using original URL");
+          airtableFields["Image URL"] = articleImage;
+        }
+      } catch (gdErr) {
+        console.error("[Pipeline] GDrive re-host failed: " + gdErr.message);
+        airtableFields["Image URL"] = articleImage;
+      }
+    }
+
+    var cleaned = {};
+    for (var fk in airtableFields) {
+      if (airtableFields[fk] !== null && airtableFields[fk] !== undefined && airtableFields[fk] !== "") {
+        cleaned[fk] = airtableFields[fk];
+      }
+    }
+
     try { var rec = await airtableCreate(cleaned); console.log("[Pipeline] Saved: " + rec.id); }
     catch (err) { console.error("[Pipeline] Save failed: " + err.message); }
   }
@@ -457,16 +438,13 @@ export async function runOrchestrator(task, context) {
   console.log("=================================");
 
   try {
-    // ✅ MEMORY: Save user message
     await saveConversation(chatId, "user", task);
 
-    // ✅ MEMORY: Detect & save feedback preferences
     var feedbacks = detectFeedback(task);
     for (var fi = 0; fi < feedbacks.length; fi++) {
       await savePreference(chatId, feedbacks[fi].key, feedbacks[fi].value, task);
     }
 
-    // ✅ MEMORY: Load conversation history + preferences
     var memContext = await buildContext(chatId, task);
     var history = memContext.history;
     var prefString = memContext.prefString;
@@ -492,23 +470,19 @@ export async function runOrchestrator(task, context) {
       return { response: "Sila bagi URL.", error: true };
     }
 
-    // STEP 1: UNDERSTANDING (with preferences injected)
     console.log("STEP 1: UNDERSTANDING");
     var understandingPrompt = BOSS_CHAT_PROMPT + prefString;
     var understanding = isCasualMessage(task) ? "Casual chat." : await callLLM(understandingPrompt, "Ringkaskan apa user nak (1 ayat).\nMessage: " + task, task, history);
 
-    // STEP 2: MEMORY
     console.log("STEP 2: MEMORY");
     var memories = await searchMemory(task);
 
-    // STEP 3: PLANNING
     console.log("STEP 3: PLANNING");
     var plan = await planTask(understanding, memories, task, history);
     var agentSet = {};
     for (var pp = 0; pp < plan.length; pp++) agentSet[plan[pp].agent] = true;
     console.log("PLAN: " + plan.length + " steps");
 
-    // STEP 4: EXECUTION
     console.log("STEP 4: EXECUTION");
     var results = [];
     var lastResult = null;
@@ -559,7 +533,6 @@ export async function runOrchestrator(task, context) {
       }
     }
 
-    // IMAGE ROUTING
     if (imageGenerated && imageRawUrl) {
       if (taskType === "image") {
         console.log("[Image] Standalone -> Telegram");
@@ -575,7 +548,6 @@ export async function runOrchestrator(task, context) {
       }
     }
 
-    // STEP 5: REVIEW
     console.log("STEP 5: REVIEW");
     var finalResponse;
     if (results.length === 0) finalResponse = "Tak dapat proses. Cuba lagi.";
@@ -587,7 +559,6 @@ export async function runOrchestrator(task, context) {
       finalResponse = await callLLM(BOSS_CHAT_PROMPT, "Rewrite as casual Malay reply. No JSON.\n\n" + finalResponse, task, history);
     }
 
-    // STEP 6: MEMORY SAVE
     console.log("STEP 6: MEMORY");
     await saveMemory(task, finalResponse);
     await logActivity("orchestrator", task, finalResponse, "success");
