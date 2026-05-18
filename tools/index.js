@@ -1,91 +1,38 @@
 // ============================================================
 // AURA v4.1 — Tools Barrel File
-// File: tools/index.js
 // ============================================================
 
-// Telegram
-export {
-  sendTelegram,
-  sendTelegramImage,
-  sendTelegramBase64Image,
-  sendSmartResponse,
-  sendTelegramTyping,
-  getTelegramFile
-} from "./telegram.js";
-
-// OpenRouter (keep backward compat)
+export { sendTelegram, sendTelegramImage, sendTelegramBase64Image, sendSmartResponse, sendTelegramTyping, getTelegramFile } from "./telegram.js";
 export { generateImage } from "./openRouter.js";
-
-// OpenRouter extra (if your openRouter.js exports these)
-export {
-  chatCompletion,
-  firecrawlSearch,
-  openRouterAnalyzeImage,
-  getCostReport,
-  shouldUseFreeModel,
-  getCredits,
-  getUsageStats
-} from "./openRouter.js";
-
-// Supabase
-export {
-  supabaseQuery,
-  supabaseInsert,
-  supabaseSearch,
-  searchMemory,
-  saveMemory,
-  logActivity
-} from "./supabase.js";
-
-// n8n
+export { chatCompletion, firecrawlSearch, openRouterAnalyzeImage, getCostReport, shouldUseFreeModel, getCredits, getUsageStats } from "./openRouter.js";
+export { supabaseQuery, supabaseInsert, supabaseSearch, searchMemory, saveMemory, logActivity } from "./supabase.js";
 export { triggerN8n } from "./n8n.js";
+export { callToolLLM, webSearch, research, analyzeImage, writeContent, generateCaption } from "./ai.js";
+export { airtableCreate, airtableUpdate, airtableFindByFormula, airtableGet } from "./airtable.js";
+export { uploadImageToGDrive } from "./gdrive.js";
+export { saveConversation, getConversationHistory, getPreferences, savePreference, detectFeedback, buildContext, saveKnowledge, queryKnowledge, getMonthlyRecall } from "./memory.js";
 
-// AI tools (Tavily search, research, content, vision)
-export {
-  callToolLLM,
-  webSearch,
-  research,
-  analyzeImage,
-  writeContent,
-  generateCaption
-} from "./ai.js";
-
-// Airtable (NEW)
-export {
-  airtableCreate,
-  airtableUpdate,
-  airtableFindByFormula,
-  airtableGet
-} from "./airtable.js";
-
-// === Tool Map ===
 import { webSearch, research, analyzeImage, writeContent, generateCaption } from "./ai.js";
 import { generateImage } from "./openRouter.js";
 import { airtableCreate, airtableUpdate, airtableFindByFormula, airtableGet } from "./airtable.js";
+import { uploadImageToGDrive } from "./gdrive.js";
 
-export const TOOLS = {
-  webSearch,
-  research,
-  generateImage,
-  analyzeImage,
-  writeContent,
-  generateCaption,
-  airtableCreate,
-  airtableUpdate,
-  airtableFindByFormula,
-  airtableGet
+export var TOOLS = {
+  webSearch, research, generateImage, analyzeImage, writeContent, generateCaption,
+  airtableCreate, airtableUpdate, airtableFindByFormula, airtableGet,
+  uploadImageToGDrive
 };
 
-export const TOOL_DESCRIPTIONS = {
-  webSearch: "Search internet for current info, news, trends",
+export var TOOL_DESCRIPTIONS = {
+  webSearch: "Search internet (Firecrawl + Tavily)",
   research: "Deep analysis & reasoning",
-  generateImage: "Create AI images via OpenRouter (Gemini Image)",
-  analyzeImage: "Analyze/read images with AI vision",
-  writeContent: "Write long-form content (FB/IG/etc)",
-  generateCaption: "Quick caption + hooks + hashtags",
-  airtableCreate: "Create Airtable record (content staging)",
-  airtableUpdate: "Update Airtable record by recordId",
-  airtableFindByFormula: "Find Airtable records by filter formula",
-  airtableGet: "Get Airtable record by ID"
+  generateImage: "Create AI images (Gemini)",
+  analyzeImage: "Analyze images with AI vision",
+  writeContent: "Write long-form content",
+  generateCaption: "Quick caption + hashtags",
+  airtableCreate: "Save draft to Airtable",
+  airtableUpdate: "Update Airtable record",
+  airtableFindByFormula: "Find Airtable records",
+  airtableGet: "Get Airtable record by ID",
+  uploadImageToGDrive: "Upload image to Google Drive"
 };
-``
