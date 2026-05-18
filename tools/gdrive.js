@@ -1,6 +1,8 @@
 // ============================================================
-// AURA v4.1 — Google Drive Upload (Image Hosting)
+// AURA v4.1 — Google Drive File Manager
 // File: tools/gdrive.js
+// Handles: base64 upload, URL download+upload, public sharing
+// All files go to "Dump File" folder
 // ============================================================
 
 import axios from "axios";
@@ -36,7 +38,6 @@ async function getAccessToken() {
   };
 
   var crypto = await import("crypto");
-
   var headerB64 = Buffer.from(JSON.stringify(header)).toString("base64url");
   var payloadB64 = Buffer.from(JSON.stringify(payload)).toString("base64url");
   var unsigned = headerB64 + "." + payloadB64;
@@ -55,95 +56,66 @@ async function getAccessToken() {
   return resp.data.access_token;
 }
 
-export async function uploadImageToGDrive(base64DataUri, fileName) {
-  if (!FOLDER_ID) {
-    console.error("[GDrive] GDRIVE_FOLDER_ID not set");
-    return { success: false, error: "GDRIVE_FOLDER_ID not configured" };
-  }
+// ============================================================
+// Upload raw buffer to GDrive
+// ============================================================
+async function uploadBufferToGDrive(imageBuffer, mimeType, fileName, token) {
+  if (!FOLDER_ID) throw new Error("GDRIVE_FOLDER_ID not configured");
 
-  try {
-    var token = await getAccessToken();
+  console.log("[GDrive] Uploading: " + fileName + " (" + Math.round(imageBuffer.length / 1024) + "KB)");
 
-    var base64Data = base64DataUri;
-    var mimeType = "image/png";
-    var dataUriMatch = base64DataUri.match(/^data:(image\/[a-zA-Z]+);base64,/);
-    if (dataUriMatch) {
-      mimeType = dataUriMatch[1];
-      base64Data = base64DataUri.substring(dataUriMatch[0].length);
+  var metadata = {
+    name: fileName,
+    parents: [FOLDER_ID],
+    mimeType: mimeType
+  };
+
+  var base64Data = imageBuffer.toString("base64");
+
+  var boundary = "aura_upload_" + Date.now();
+  var body = "--" + boundary + "\r\n" +
+    "Content-Type: application/json; charset=UTF-8\r\n\r\n" +
+    JSON.stringify(metadata) + "\r\n" +
+    "--" + boundary + "\r\n" +
+    "Content-Type: " + mimeType + "\r\n" +
+    "Content-Transfer-Encoding: base64\r\n\r\n" +
+    base64Data + "\r\n" +
+    "--" + boundary + "--";
+
+  var uploadResp = await axios.post(
+    "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,webViewLink,webContentLink",
+    body,
+    {
+      headers: {
+        "Authorization": "Bearer " + token,
+        "Content-Type": "multipart/related; boundary=" + boundary
+      },
+      timeout: 60000,
+      maxContentLength: 50 * 1024 * 1024
     }
+  );
 
-    var imageBuffer = Buffer.from(base64Data, "base64");
+  var fileId = uploadResp.data.id;
+  console.log("[GDrive] Uploaded: " + fileId);
 
-    if (!fileName) {
-      var ext = mimeType.split("/")[1] || "png";
-      fileName = "aura_" + Date.now() + "." + ext;
-    }
+  // Set public sharing
+  await axios.post(
+    "https://www.googleapis.com/drive/v3/files/" + fileId + "/permissions",
+    { role: "reader", type: "anyone" },
+    { headers: { "Authorization": "Bearer " + token }, timeout: 10000 }
+  );
 
-    console.log("[GDrive] Uploading: " + fileName + " (" + Math.round(imageBuffer.length / 1024) + "KB)");
+  console.log("[GDrive] Public sharing set");
 
-    var metadata = {
-      name: fileName,
-      parents: [FOLDER_ID],
-      mimeType: mimeType
-    };
-
-    var boundary = "aura_upload_boundary_" + Date.now();
-    var body = "--" + boundary + "\r\n" +
-      "Content-Type: application/json; charset=UTF-8\r\n\r\n" +
-      JSON.stringify(metadata) + "\r\n" +
-      "--" + boundary + "\r\n" +
-      "Content-Type: " + mimeType + "\r\n" +
-      "Content-Transfer-Encoding: base64\r\n\r\n" +
-      base64Data + "\r\n" +
-      "--" + boundary + "--";
-
-    var uploadResp = await axios.post(
-      "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,webViewLink,webContentLink",
-      body,
-      {
-        headers: {
-          "Authorization": "Bearer " + token,
-          "Content-Type": "multipart/related; boundary=" + boundary
-        },
-        timeout: 30000,
-        maxContentLength: 50 * 1024 * 1024
-      }
-    );
-
-    var fileId = uploadResp.data.id;
-    console.log("[GDrive] Uploaded: " + fileId);
-
-    await axios.post(
-      "https://www.googleapis.com/drive/v3/files/" + fileId + "/permissions",
-      { role: "reader", type: "anyone" },
-      {
-        headers: { "Authorization": "Bearer " + token },
-        timeout: 10000
-      }
-    );
-
-    console.log("[GDrive] Permission set: anyone can view");
-
-    var directUrl = "https://drive.google.com/uc?export=download&id=" + fileId;
-    var thumbnailUrl = "https://drive.google.com/thumbnail?id=" + fileId + "&sz=w1000";
-
-    return {
-      success: true,
-      fileId: fileId,
-      url: directUrl,
-      thumbnailUrl: thumbnailUrl,
-      webViewLink: uploadResp.data.webViewLink || "",
-      fileName: fileName
-    };
-
-  } catch (err) {
-    console.error("[GDrive] Upload failed:", err.message);
-    if (err.response) {
-      console.error("[GDrive] Status:", err.response.status);
-      console.error("[GDrive] Data:", JSON.stringify(err.response.data || {}).substring(0, 500));
-    }
-    return { success: false, error: err.message };
-  }
+  return {
+    success: true,
+    fileId: fileId,
+    url: "https://drive.google.com/uc?export=download&id=" + fileId,
+    thumbnailUrl: "https://drive.google.com/thumbnail?id=" + fileId + "&sz=w1000",
+    webViewLink: uploadResp.data.webViewLink || "",
+    fileName: fileName
+  };
 }
 
-export default { uploadImageToGDrive };
+// ============================================================
+// Upload base64 image to GDrive
