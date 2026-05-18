@@ -1,6 +1,7 @@
 // ============================================================
 // AURA v4.1 — Orchestrator (The Brain)
-// FULL MERGE: Content Style + Memory + GDrive + Cost + All Fixes
+// Batch A+B: Persona Lock, BM Only, Malaysia-first,
+// Bebenang Threads, GDrive re-host, Image Routing
 // ============================================================
 
 import dotenv from "dotenv";
@@ -19,6 +20,10 @@ import {
 } from "./tools/index.js";
 
 var OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
+
+// ============================================================
+// HELPERS
+// ============================================================
 
 function extractSmartTitle(caption, originalTask) {
   if (!caption) return (originalTask || "Untitled").substring(0, 80);
@@ -56,8 +61,64 @@ function getMaxTokens(taskType) {
   return limits[taskType] || 1500;
 }
 
+// ✅ BATCH A1: Persona lock — block AI self-disclosure
+function sanitizePersona(text) {
+  if (!text) return text;
+  var t = String(text);
+  var banned = [
+    "saya ai", "aku ai", "i am an ai", "as an ai", "language model",
+    "saya bukan manusia", "bukan manusia", "tak boleh faham emosi",
+    "saya tak ada emosi", "saya tidak mempunyai emosi",
+    "saya tidak dapat", "saya tak dapat access", "i cannot access",
+    "saya tak boleh generate", "i cannot generate", "saya tak boleh access",
+    "saya cuma ai", "just an ai", "as a language model"
+  ];
+  var lower = t.toLowerCase();
+  for (var b = 0; b < banned.length; b++) {
+    if (lower.includes(banned[b])) {
+      return "Faham. Jom kita settle. Nak saya buat apa tepatnya?";
+    }
+  }
+  return t;
+}
+
+// ✅ BATCH A3: Malaysia-first news query rewrite
+function rewriteNewsQuery(q) {
+  var s = (q || "").toLowerCase();
+  if (s.includes("indonesia") || s.includes("jakarta") || s.includes("kompas")) {
+    return q;
+  }
+  return q + " Malaysia site:astroawani.com OR site:bernama.com OR site:thestar.com.my OR site:malaysiakini.com OR site:hmetro.com.my OR site:freemalaysiatoday.com";
+}
+
+// ✅ BATCH B1: Split text into bebenang format
+function splitThread(text, maxChars) {
+  if (!maxChars) maxChars = 480;
+  if (!text) return [];
+  var raw = String(text).split("\n").map(function(s) { return s.trim(); }).filter(Boolean);
+  var posts = [];
+  var cur = "";
+  for (var i = 0; i < raw.length; i++) {
+    var add = (cur ? "\n\n" : "") + raw[i];
+    if ((cur + add).length > maxChars) {
+      if (cur) posts.push(cur);
+      cur = raw[i];
+    } else {
+      cur += add;
+    }
+  }
+  if (cur) posts.push(cur);
+  var total = posts.length;
+  return posts.map(function(p, idx) { return "(" + (idx + 1) + "/" + total + ")\n" + p; });
+}
+
+// ============================================================
+// PROMPTS (✅ BATCH A2: BM Only + Region Malaysia)
+// ============================================================
+
 var BOSS_PLAN_PROMPT =
-  "You are AURA - Matrol personal AI assistant.\n\n" +
+  "You are AURA - Matrol personal AI assistant.\n" +
+  "LOKASI: Malaysia. TIMEZONE: Asia/Kuala_Lumpur.\n\n" +
   "AVAILABLE TOOLS:\n" +
   "- webSearch, research, generateImage, analyzeImage, writeContent, generateCaption\n" +
   "- contentPipeline, airtableCreate, airtableUpdate, airtableFindByFormula\n\n" +
@@ -68,7 +129,7 @@ var BOSS_PLAN_PROMPT =
   "   Step 2: use generateImage (matching visual)\n" +
   "   Step 3: use airtableCreate (save as Draft)\n" +
   "3. IMAGE ONLY (buat gambar - NO mention of airtable/draft/save) -> 1 step, use generateImage\n" +
-  "4. RESEARCH -> ops agent, use webSearch\n" +
+  "4. RESEARCH/NEWS -> ops agent, use webSearch\n" +
   "5. CODING -> coding agent, direct response\n" +
   "6. REPORT (/report) -> direct report\n" +
   "7. PIPELINE (/pipeline URL) -> use contentPipeline\n\n" +
@@ -77,58 +138,67 @@ var BOSS_PLAN_PROMPT =
 
 var BOSS_CHAT_PROMPT =
   "You are AURA CORE v4.1 - Matrol personal AI operating system.\n" +
-  "Casual Malay/English. Default Malay.\n" +
-  "NEVER return JSON. NEVER say you cannot access tools.\n" +
-  "You CAN generate images, search web, save to Airtable.\n" +
-  "Reply like a smart friend. Natural emoji (max 2).\n" +
-  "ALWAYS remember context from conversation history provided.";
+  "LOKASI: Malaysia. TIMEZONE: Asia/Kuala_Lumpur.\n\n" +
+  "LANGUAGE RULE:\n" +
+  "- Balas dalam Bahasa Malaysia sahaja.\n" +
+  "- Jangan guna English kecuali nama khas (contoh: OpenRouter, Airtable, Google Drive).\n" +
+  "- Kalau sumber English/Indonesia, terjemah ke BM.\n\n" +
+  "PERSONA RULE:\n" +
+  "- JANGAN SESEKALI sebut kau AI, model, atau ada limitation.\n" +
+  "- JANGAN minta maaf sebab 'saya AI'.\n" +
+  "- Kalau user komplen, acknowledge macam kawan, bukan macam AI minta maaf.\n" +
+  "- Kau BOLEH generate gambar, search web, save ke Airtable. Jangan cakap tak boleh.\n\n" +
+  "RULES:\n" +
+  "- NEVER return JSON\n" +
+  "- Reply macam kawan. Pendek, warm, natural.\n" +
+  "- Emoji max 2 sahaja.\n" +
+  "- ALWAYS ingat konteks conversation history.";
 
 var AGENT_ROLES = {
   content:
-    "You are AURA Content agent.\n\n" +
+    "You are AURA Content agent.\n" +
+    "LOKASI: Malaysia. BAHASA: Bahasa Malaysia sahaja.\n\n" +
     "WRITING STYLE (IKUT NI EXACTLY):\n" +
     "- Tulis macam Malaysian content creator, BUKAN macam AI\n" +
     "- SHORT paragraphs. 1-2 ayat per paragraph MAX.\n" +
     "- Line break antara setiap paragraph\n" +
-    "- JANGAN guna bullet points atau numbered lists dalam social posts\n" +
+    "- JANGAN guna bullet points atau numbered lists\n" +
     "- JANGAN start dengan 'Eh korang' atau 'Hai guys' atau 'Hey geng'\n" +
-    "- JANGAN guna lebih 2 emoji dalam satu post\n" +
-    "- JANGAN tulis 'Share dan tag kawan' atau mana-mana CTA paksa\n" +
-    "- JANGAN guna tanda lama (em dash) macam ni: --\n" +
+    "- JANGAN guna lebih 2 emoji\n" +
+    "- JANGAN tulis 'Share dan tag kawan' atau CTA paksa\n" +
+    "- JANGAN guna em dash (--)\n" +
     "- Tone: macam kawan cerita kat mamak. Santai tapi ada isi.\n" +
     "- Ada PENDIRIAN. Bukan neutral boring.\n" +
-    "- Boleh provocative sikit. Buat orang nak respond.\n" +
     "- End dengan statement yang buat orang fikir.\n\n" +
     "PLATFORM FORMAT:\n" +
-    "- Facebook: 5-8 short paragraphs. Hook first line (bold/tegas). Story middle. Punchline end. Max 2 hashtags.\n" +
-    "- Instagram: 3-5 short paragraphs. Aesthetic minimal. 5-8 hashtags at END only.\n" +
-    "- Threads: Bebenang style. Each post max 500 chars. Numbered if series.\n" +
+    "- Facebook: 5-8 short paragraphs. Hook first line. Story middle. Punchline end. Max 2 hashtags.\n" +
+    "- Instagram: 3-5 short paragraphs. Aesthetic. 5-8 hashtags at END only.\n" +
+    "- Threads: Bebenang style. Setiap post max 480 chars. Numbered (1/n). Punchy.\n" +
     "- X/Twitter: 1-2 ayat sharp. Max 280 chars. 1-2 hashtags.\n\n" +
-    "STYLE REFERENCE:\n" +
-    "- MFS style: Direct, tegas, fakta + pendapat. Short lines.\n" +
-    "- Abe Nazz style: Storytelling, personal experience.\n" +
-    "- Thread style: Numbered points, short punchy facts.\n\n" +
-    "FORBIDDEN: Generic AI opening, excessive emojis, forced CTA, corporate tone, bullet points, em dash (--)\n\n" +
+    "FORBIDDEN: Generic AI opening, excessive emojis, forced CTA, corporate tone, bullet points, em dash, English\n\n" +
     "BRAND (Sakluma): Malaysian smoked meats. Kampung authentic.\n" +
-    "Voice: macam pakcik yang tahu rahsia masakan. Humble tapi confident.\n" +
     "ONLY mention Sakluma if asked.\n\n" +
-    "CASUAL CHAT: Reply macam kawan. Pendek. Warm.\n" +
-    "NEVER return JSON. Default: Bahasa Malaysia (casual).",
-  ops: "AURA Ops agent. Casual Malay. NEVER return JSON.",
+    "CASUAL CHAT: Reply macam kawan. Pendek. Warm. BM sahaja.\n" +
+    "NEVER return JSON.",
+  ops: "AURA Ops agent. Bahasa Malaysia sahaja. NEVER return JSON.",
   coding: "AURA Coding agent. Debug, code gen, troubleshoot. NEVER return JSON.",
-  finance: "AURA Finance agent. Pricing, ROI. NEVER return JSON.",
-  sales: "AURA Sales agent. NEVER return JSON.",
-  marketing: "AURA Marketing agent. NEVER return JSON.",
-  training: "AURA Training agent. NEVER return JSON.",
-  architect: "AURA Architect agent. NEVER return JSON."
+  finance: "AURA Finance agent. Pricing, ROI. Bahasa Malaysia. NEVER return JSON.",
+  sales: "AURA Sales agent. Bahasa Malaysia. NEVER return JSON.",
+  marketing: "AURA Marketing agent. Bahasa Malaysia. NEVER return JSON.",
+  training: "AURA Training agent. Bahasa Malaysia. NEVER return JSON.",
+  architect: "AURA Architect agent. Bahasa Malaysia. NEVER return JSON."
 };
+
+// ============================================================
+// CORE FUNCTIONS
+// ============================================================
 
 export function detectTaskType(message) {
   var msg = (message || "").toLowerCase();
   if (msg.includes("/report") || msg.includes("/usage") || msg.includes("/cost")) return "report";
   if (msg.includes("/pipeline") || msg.includes("content pipeline")) return "content_pipeline";
   if ((msg.includes("generate image") || msg.includes("buat gambar") || msg.includes("/image") || msg.includes("generateimage")) && !msg.includes("caption") && !msg.includes("draft") && !msg.includes("save") && !msg.includes("airtable")) return "image";
-  if (msg.includes("search") || msg.includes("cari") || msg.includes("trend") || msg.includes("berita") || msg.includes("/search")) return "research";
+  if (msg.includes("search") || msg.includes("cari") || msg.includes("trend") || msg.includes("berita") || msg.includes("/search") || msg.includes("menarik hari") || msg.includes("news")) return "research";
   if (msg.includes("code") || msg.includes("debug") || msg.includes("error") || msg.includes("bug") || msg.includes("/code")) return "coding";
   if (msg.includes("caption") || msg.includes("content") || msg.includes("tulis") || msg.includes("draft") || msg.includes("sakluma") || msg.includes("keelyn") || msg.includes("post") || msg.includes("copywriting")) return "content";
   if (msg.includes("finance") || msg.includes("kewangan") || msg.includes("kira") || msg.includes("budget") || msg.includes("pricing")) return "finance";
@@ -159,11 +229,11 @@ async function callLLM(systemPrompt, userMessage, taskType, history) {
     if (fb.success) return fb.content;
   }
   console.error("LLM FAILED: " + result.error);
-  return "Eh sorry, technical issue jap. Cuba lagi!";
+  return "Alamak, ada masalah teknikal. Cuba lagi kejap.";
 }
 
 function isCasualMessage(text) {
-  var casual = ["hi","hello","hey","yo","hai","ok","okay","noted","thanks","tq","ty","bye","test","testing","apa khabar","good morning","morning","haha","lol","nice","cool","best","gempak","ya","yes","no","tak","nope"];
+  var casual = ["hi","hello","hey","yo","hai","ok","okay","noted","thanks","tq","ty","bye","test","testing","apa khabar","good morning","morning","haha","lol","nice","cool","best","gempak","ya","yes","no","tak","nope","check","rock"];
   var lower = (text || "").toLowerCase().trim();
   for (var i = 0; i < casual.length; i++) if (lower === casual[i]) return true;
   if (lower.length < 15) { for (var j = 0; j < casual.length; j++) if (lower.indexOf(casual[j]) === 0) return true; }
@@ -178,6 +248,7 @@ async function executeWithTools(agentName, action, params, context) {
   var a = (action || "").toLowerCase();
   console.log("\n--- AGENT: " + agentName + " | ACTION: " + action + " ---");
 
+  // IMAGE ANALYSIS
   if (a.includes("use analyzeimage") || a.includes("analyze image") || a.includes("analyzeimage") || a.includes("analisis gambar")) {
     var imageInput = (context && context.imageBase64) || params.imageUrl || params.url || "";
     var question = params.question || (context && context.originalTask) || "Analyze this image.";
@@ -186,19 +257,26 @@ async function executeWithTools(agentName, action, params, context) {
     return await analyzeImage(imageInput, question);
   }
 
+  // ✅ WEB SEARCH (BATCH A3: Malaysia-first)
   if (a.includes("use websearch") || a.includes("websearch") || a.includes("search internet") || a.includes("cari info")) {
     var q = params.query || params.topic || (context && context.originalTask) || action;
-    console.log("[Engine] webSearch: " + q);
+    // Malaysia-first for news/trending queries
+    if (q.toLowerCase().match(/berita|trending|menarik hari|news|terkini/)) {
+      q = rewriteNewsQuery(q);
+    }
+    console.log("[Engine] webSearch: " + q.substring(0, 120));
     var sr = await firecrawlSearch(q, { depth: "high", maxResults: 5 });
-    if (sr.success) return "Search Results:\n" + sr.content;
+    if (sr.success) return sr.content;
     var r = await webSearch(q);
-    return "Search Results:\n" + ((r && r.answer) || "No results");
+    return (r && r.answer) || "Takde hasil carian.";
   }
 
+  // RESEARCH
   if (a.includes("use research") || a.includes("deep analysis")) {
     return await research(params.topic || (context && context.originalTask) || action);
   }
 
+  // IMAGE GENERATION (✅ B3: Standalone → Telegram only, Content → GDrive)
   if (a.includes("use generateimage") || a.includes("generateimage") || a.includes("buat gambar") || a.includes("create image") || a.includes("generate image")) {
     var imgPrompt = params.prompt || params.description || action.replace(/use generateimage:?\s*/i, "").replace(/generateimage:?\s*/i, "");
     if (imgPrompt.length < 20 && context && context.originalTask) {
@@ -207,42 +285,45 @@ async function executeWithTools(agentName, action, params, context) {
     console.log("IMAGE GENERATION: " + imgPrompt);
     var imgUrl = await generateImage(imgPrompt, { width: 1024, height: 1024 });
     if (imgUrl) {
-      if (imgUrl.startsWith("data:image")) {
-        console.log("[Image] Base64 detected, uploading to GDrive...");
+      // Content flow (has airtable/save/draft in original task) → upload GDrive
+      var isContentFlow = (context && context.originalTask || "").toLowerCase().match(/airtable|save|draft|simpan/);
+      if (imgUrl.startsWith("data:image") && isContentFlow) {
+        console.log("[Image] Content flow → uploading to GDrive...");
         try {
           var gdResult = await uploadImageToGDrive(imgUrl, "aura_" + Date.now() + ".png");
           if (gdResult.success) {
             console.log("[Image] GDrive success: " + gdResult.url);
             return "IMAGE_URL:" + gdResult.url;
           }
-        } catch (gdErr) {
-          console.error("[Image] GDrive failed: " + gdErr.message);
-        }
-        return "IMAGE_BASE64:" + imgUrl;
+        } catch (gdErr) { console.error("[Image] GDrive failed: " + gdErr.message); }
       }
-      return "IMAGE_URL:" + imgUrl;
+      // Standalone or GDrive failed → return base64 for Telegram
+      return "IMAGE_BASE64:" + imgUrl;
     }
     return "Gambar tak berjaya. Cuba lagi?";
   }
 
+  // WRITE CONTENT
   if (a.includes("use writecontent") || a.includes("writecontent") || a.includes("tulis artikel")) {
     return await writeContent(params.brief || (context && context.originalTask) || action, params.style || "casual", params.platform || "general");
   }
 
+  // CAPTION
   if (a.includes("use generatecaption") || a.includes("generatecaption") || a.includes("buat caption")) {
     return await generateCaption(params.topic || (context && context.originalTask) || action, params.platform || "facebook", params.mood || "engaging");
   }
 
+  // CONTENT PIPELINE
   if (a.includes("use contentpipeline") || a.includes("contentpipeline") || a.includes("content pipeline")) {
     var pipeUrl = params.url || action.match(/https?:\/\/[^\s]+/);
     if (pipeUrl) {
       if (typeof pipeUrl !== "string") pipeUrl = pipeUrl[0];
       var pipeResult = await processContentPipeline(pipeUrl);
       if (pipeResult.success) {
-        var pt = "Content Pipeline Complete!\n\n";
-        if (pipeResult.articleImage) pt += "Image: " + pipeResult.articleImage + "\n\n";
+        var pt = "Pipeline siap!\n\n";
+        if (pipeResult.articleImage) pt += "Gambar: masuk Airtable\n\n";
         if (pipeResult.platforms.fb && pipeResult.platforms.fb.success) pt += "=== FB ===\n" + pipeResult.platforms.fb.content + "\n\n";
-        if (pipeResult.platforms.threads && pipeResult.platforms.threads.success) pt += "=== THREADS ===\n" + pipeResult.platforms.threads.content + "\n\n";
+        if (pipeResult.platforms.threads && pipeResult.platforms.threads.success) pt += "=== THREADS (Bebenang) ===\n" + pipeResult.platforms.threads.content + "\n\n";
         if (pipeResult.platforms.x && pipeResult.platforms.x.success) pt += "=== X ===\n" + pipeResult.platforms.x.content + "\n\n";
         return pt;
       }
@@ -251,6 +332,7 @@ async function executeWithTools(agentName, action, params, context) {
     return "Sila bagi URL.";
   }
 
+  // AIRTABLE CREATE
   if (a.includes("use airtablecreate") || a.includes("airtablecreate") || a.includes("save to airtable") || a.includes("airtable create")) {
     console.log("[Engine] airtableCreate");
     var captionValue = params.caption || params.Caption || "";
@@ -264,7 +346,6 @@ async function executeWithTools(agentName, action, params, context) {
 
     var titleValue = extractSmartTitle(captionValue, context && context.originalTask);
     var hashtagsValue = extractHashtags(captionValue);
-
     var platformValue = "Facebook";
     var taskLower = (context && context.originalTask || "").toLowerCase();
     if (taskLower.includes("instagram") || taskLower.includes("ig")) platformValue = "Instagram";
@@ -277,44 +358,46 @@ async function executeWithTools(agentName, action, params, context) {
       "Created By": (context && context.from) || "AURA",
       "Content Type": imageUrlValue ? "Image" : "Post",
       "AI Caption": captionValue || "", "AI Hashtags": hashtagsValue,
-      "AI Content Insights": "Platform: " + platformValue + " | AURA",
+      "AI Content Insights": "Platform: " + platformValue + " | AURA | Malaysia",
       "Hashtags": hashtagsValue, "Brand": "Sakluma"
     };
     if (imageUrlValue) fields["Image file"] = [{ url: imageUrlValue }];
 
     var cleaned = {};
     for (var fk in fields) { if (fields[fk] !== null && fields[fk] !== undefined && fields[fk] !== "") cleaned[fk] = fields[fk]; }
-
     try {
       var rec = await airtableCreate(cleaned);
-      var resp = "\u2705 Saved to Airtable (Draft)\nRecord ID: " + rec.id + "\nTitle: " + titleValue;
+      var resp = "\u2705 Dah save ke Airtable (Draft)\nRecord ID: " + rec.id + "\nTitle: " + titleValue;
       if (hashtagsValue) resp += "\nHashtags: " + hashtagsValue;
-      if (imageUrlValue) resp += "\nImage: attached";
+      if (imageUrlValue) resp += "\nGambar: attached";
       return resp;
     } catch (err) {
       console.error("[AirtableCreate] Failed:", err.message);
-      return "\u274C Airtable save failed: " + err.message;
+      return "\u274C Airtable gagal: " + err.message;
     }
   }
 
+  // AIRTABLE UPDATE
   if (a.includes("use airtableupdate") || a.includes("airtableupdate") || a.includes("airtable update")) {
     var recordId = params.recordId || params.id;
-    if (!recordId) return "\u274C perlukan recordId.";
+    if (!recordId) return "\u274C Perlukan recordId.";
     try { var upd = await airtableUpdate(recordId, params.fields || {}); return "\u2705 Updated: " + upd.id; }
-    catch (e) { return "\u274C Update failed: " + e.message; }
+    catch (e) { return "\u274C Update gagal: " + e.message; }
   }
 
+  // AIRTABLE FIND
   if (a.includes("use airtablefindbyformula") || a.includes("airtablefindbyformula") || a.includes("find latest draft")) {
     try {
       var res = await airtableFindByFormula('{Status}="Draft"', { maxRecords: 1 });
-      if (!res.records || !res.records.length) return "\u274C Tak jumpa Draft.";
+      if (!res.records || !res.records.length) return "\u274C Takde Draft.";
       return "\u2705 Draft: " + res.records[0].id;
-    } catch (e) { return "\u274C Find failed: " + e.message; }
+    } catch (e) { return "\u274C Find gagal: " + e.message; }
   }
 
+  // LLM FALLBACK
   console.log("[Engine] LLM fallback");
-  var role = AGENT_ROLES[agentName] || "Helpful assistant. Casual Malay. NEVER return JSON.";
-  return await callLLM(role, "TASK: " + action + (context && context.originalTask ? "\nOriginal: " + context.originalTask : "") + "\nReply casual Malay. No JSON.", action, context && context.history);
+  var role = AGENT_ROLES[agentName] || "Pembantu mesra. Bahasa Malaysia sahaja. NEVER return JSON.";
+  return await callLLM(role, "TASK: " + action + (context && context.originalTask ? "\nOriginal: " + context.originalTask : "") + "\nBalas BM sahaja. Jangan JSON.", action, context && context.history);
 }
 
 // ============================================================
@@ -343,16 +426,22 @@ async function bossApprove(step) {
 
 async function bossReview(task, results, history) {
   var txt = results.map(function(r) { return "[" + r.agent + "]: " + (r.result || "").substring(0, 500); }).join("\n\n");
-  return await callLLM(BOSS_CHAT_PROMPT, "Write final response for Matrol.\nRequest: " + task + "\n\nResults:\n" + txt + "\n\nCasual Malay. No JSON.", task, history);
+  return await callLLM(BOSS_CHAT_PROMPT, "Tulis ringkasan untuk Matrol.\nRequest: " + task + "\n\nResults:\n" + txt + "\n\nBalas BM santai. Jangan JSON.", task, history);
 }
 
+// ✅ Report hardcoded BM (tak pass ke LLM)
 async function handleReport() {
   var report = getCostReport();
-  return "\uD83D\uDCCA *AURA Report*\nRequests: " + report.requestCount + "\nCost: $" + report.dailyTotal.toFixed(4) + "\nBudget: $" + report.budget.toFixed(2) + "\nRemaining: $" + report.remaining.toFixed(4);
+  return "\uD83D\uDCCA *Laporan AURA*\n" +
+    "Jumlah request: " + report.requestCount + "\n" +
+    "Kos hari ini: $" + report.dailyTotal.toFixed(4) + "\n" +
+    "Bajet harian: $" + report.budget.toFixed(2) + "\n" +
+    "Baki: $" + report.remaining.toFixed(4) + "\n\n" +
+    "Sumber: OpenRouter (kos sebenar token)";
 }
 
 // ============================================================
-// CONTENT PIPELINE (with GDrive re-host for article images)
+// CONTENT PIPELINE (✅ B1 Bebenang + B2 GDrive re-host + BM)
 // ============================================================
 
 export async function processContentPipeline(url, options) {
@@ -362,7 +451,7 @@ export async function processContentPipeline(url, options) {
   console.log("[Pipeline] Scraping: " + url);
 
   var scrape = await firecrawlSearch(
-    "Read this article: " + url + "\n\nReturn TWO things:\n1. Main image URL (og:image or first prominent image): IMAGE_URL: https://...\n2. Comprehensive article summary.\n\nFormat:\nIMAGE_URL: [url]\nCONTENT: [summary]",
+    "Baca artikel ini: " + url + "\n\nBeri DUA benda:\n1. URL gambar utama artikel (og:image atau gambar pertama): IMAGE_URL: https://...\n2. Ringkasan lengkap artikel.\n\nFormat:\nIMAGE_URL: [url]\nCONTENT: [ringkasan]",
     { model: "google/gemini-2.5-flash", depth: "high", maxResults: 1, maxTokens: 4096 }
   );
   if (!scrape.success) return { success: false, error: scrape.error };
@@ -374,11 +463,34 @@ export async function processContentPipeline(url, options) {
   var articleContent = fullResponse.replace(/IMAGE_URL:\s*https?:\/\/[^\s\n]+/i, "").replace(/^CONTENT:\s*/im, "").trim();
 
   var results = {};
-  var fmts = { fb: "Facebook post, storytelling, 3-5 paragraphs, hook + CTA. Bahasa Malaysia.", threads: "Threads, max 500 chars, punchy.", x: "X/Twitter, max 280 chars, 2-3 hashtags.", ig: "Instagram caption, aesthetic, 8-12 hashtags." };
+  // ✅ BM enforced + bebenang for threads
+  var fmts = {
+    fb: "Facebook post. Storytelling, 3-5 perenggan pendek, hook kuat + CTA lembut. BAHASA MALAYSIA SAHAJA. Jangan English.",
+    threads: "Threads bebenang style. Tulis SATU teks panjang, setiap perenggan pendek (max 2 ayat). Nanti akan dipotong jadi bebenang. BAHASA MALAYSIA SAHAJA.",
+    x: "X/Twitter, max 280 aksara, 2-3 hashtags. BAHASA MALAYSIA SAHAJA.",
+    ig: "Instagram caption, aesthetic, 8-12 hashtags at END. BAHASA MALAYSIA SAHAJA."
+  };
 
   for (var p = 0; p < platforms.length; p++) {
-    var cr = await chatCompletion({ model: "anthropic/claude-sonnet-4", messages: [{ role: "user", content: "Create a " + (fmts[platforms[p]] || fmts.fb) + "\nBrand: " + brand + "\nArticle:\n" + articleContent }], systemPrompt: AGENT_ROLES.content, maxTokens: 1500, temperature: 0.85 });
-    results[platforms[p]] = { success: cr.success, content: cr.content, model: cr.model };
+    var cr = await chatCompletion({
+      model: "anthropic/claude-sonnet-4",
+      messages: [{ role: "user", content: "Buat " + (fmts[platforms[p]] || fmts.fb) + "\nBrand: " + brand + "\nArtikel:\n" + articleContent }],
+      systemPrompt: AGENT_ROLES.content,
+      maxTokens: 1500,
+      temperature: 0.85
+    });
+
+    var platformContent = cr.content || "";
+
+    // ✅ B1: Auto-split threads into bebenang
+    if (platforms[p] === "threads" && platformContent) {
+      var threadPosts = splitThread(platformContent, 480);
+      if (threadPosts.length > 1) {
+        platformContent = threadPosts.join("\n\n---\n\n");
+      }
+    }
+
+    results[platforms[p]] = { success: cr.success, content: platformContent, model: cr.model };
   }
 
   // Auto-save to Airtable
@@ -389,34 +501,30 @@ export async function processContentPipeline(url, options) {
       "Caption": bestCaption, "Platform": "Facebook", "Status": "Draft",
       "Created By": "AURA Pipeline", "Content Type": articleImage ? "Image" : "Post",
       "AI Caption": bestCaption, "AI Hashtags": extractHashtags(bestCaption),
-      "AI Content Insights": "Source: " + url, "Hashtags": extractHashtags(bestCaption), "Brand": brand
+      "AI Content Insights": "Sumber: " + url + " | Pipeline auto", "Hashtags": extractHashtags(bestCaption), "Brand": brand
     };
 
-    // ✅ Re-host article image to GDrive (bypass hotlink protection)
+    // ✅ B2: Re-host article image to GDrive
     if (articleImage) {
       try {
         var gdResult = await downloadAndUploadToGDrive(articleImage);
         if (gdResult.success) {
-          console.log("[Pipeline] Image re-hosted to GDrive: " + gdResult.url);
+          console.log("[Pipeline] Image re-hosted: " + gdResult.url);
           airtableFields["Image URL"] = gdResult.url;
           airtableFields["Image file"] = [{ url: gdResult.url }];
         } else {
-          console.log("[Pipeline] GDrive failed, using original URL");
           airtableFields["Image URL"] = articleImage;
         }
       } catch (gdErr) {
-        console.error("[Pipeline] GDrive re-host failed: " + gdErr.message);
+        console.error("[Pipeline] GDrive failed: " + gdErr.message);
         airtableFields["Image URL"] = articleImage;
       }
     }
 
     var cleaned = {};
     for (var fk in airtableFields) {
-      if (airtableFields[fk] !== null && airtableFields[fk] !== undefined && airtableFields[fk] !== "") {
-        cleaned[fk] = airtableFields[fk];
-      }
+      if (airtableFields[fk] !== null && airtableFields[fk] !== undefined && airtableFields[fk] !== "") cleaned[fk] = airtableFields[fk];
     }
-
     try { var rec = await airtableCreate(cleaned); console.log("[Pipeline] Saved: " + rec.id); }
     catch (err) { console.error("[Pipeline] Save failed: " + err.message); }
   }
@@ -425,7 +533,7 @@ export async function processContentPipeline(url, options) {
 }
 
 // ============================================================
-// MAIN ORCHESTRATOR (with Memory + Cost Optimization)
+// MAIN ORCHESTRATOR
 // ============================================================
 
 export async function runOrchestrator(task, context) {
@@ -450,19 +558,36 @@ export async function runOrchestrator(task, context) {
     var prefString = memContext.prefString;
 
     var taskType = detectTaskType(task);
-    if (taskType === "report") { var rt = await handleReport(); return { response: rt, result: rt }; }
+
+    // ✅ /report — hardcoded BM, no LLM
+    if (taskType === "report") {
+      var rt = await handleReport();
+      await saveConversation(chatId, "assistant", rt);
+      return { response: rt, result: rt };
+    }
+
+    // ✅ Report explanation — hardcoded BM
+    if (task.toLowerCase().includes("report ni berdasarkan apa") || task.toLowerCase().includes("report based on")) {
+      var explain = "Report tu based on tracking kos dan bilangan request AURA melalui OpenRouter.\n\n" +
+        "Requests = jumlah call ke model hari ni\n" +
+        "Cost = anggaran kos token dari OpenRouter\n" +
+        "Budget/Remaining = limit harian yang dah set\n\n" +
+        "Langfuse (kalau aktif) lebih kepada logging, kadang estimate dia boleh lari sikit.";
+      await saveConversation(chatId, "assistant", explain);
+      return { response: explain, result: explain };
+    }
 
     if (taskType === "content_pipeline") {
       var urlMatch = task.match(/https?:\/\/[^\s]+/);
       if (urlMatch) {
         var pr = await processContentPipeline(urlMatch[0]);
         if (pr.success) {
-          var pt = "\uD83D\uDCF0 *Pipeline Complete*\n\n";
-          if (pr.articleImage) pt += "Image: Attached to Airtable\n\n";
+          var pt = "\uD83D\uDCF0 *Pipeline Siap*\n\n";
+          if (pr.articleImage) pt += "Gambar: Masuk Airtable\n\n";
           if (pr.platforms.fb && pr.platforms.fb.success) pt += "*FB:*\n" + pr.platforms.fb.content + "\n\n";
-          if (pr.platforms.threads && pr.platforms.threads.success) pt += "*Threads:*\n" + pr.platforms.threads.content + "\n\n";
+          if (pr.platforms.threads && pr.platforms.threads.success) pt += "*Threads (Bebenang):*\n" + pr.platforms.threads.content + "\n\n";
           if (pr.platforms.x && pr.platforms.x.success) pt += "*X:*\n" + pr.platforms.x.content + "\n\n";
-          pt += "\u2705 Auto-saved to Airtable as Draft";
+          pt += "\u2705 Dah save ke Airtable sebagai Draft";
           await saveConversation(chatId, "assistant", pt.substring(0, 2000));
           return { response: pt, result: pt };
         }
@@ -472,7 +597,7 @@ export async function runOrchestrator(task, context) {
 
     console.log("STEP 1: UNDERSTANDING");
     var understandingPrompt = BOSS_CHAT_PROMPT + prefString;
-    var understanding = isCasualMessage(task) ? "Casual chat." : await callLLM(understandingPrompt, "Ringkaskan apa user nak (1 ayat).\nMessage: " + task, task, history);
+    var understanding = isCasualMessage(task) ? "Borak biasa." : await callLLM(understandingPrompt, "Ringkaskan apa user nak (1 ayat BM).\nMessage: " + task, task, history);
 
     console.log("STEP 2: MEMORY");
     var memories = await searchMemory(task);
@@ -494,7 +619,6 @@ export async function runOrchestrator(task, context) {
     for (var s = 0; s < plan.length; s++) {
       var step = plan[s];
       console.log("[" + step.agent.toUpperCase() + "] " + step.action);
-
       var approved = true;
       if (plan.length > 1) approved = await bossApprove(step);
       if (!approved) { console.log("SKIPPED"); continue; }
@@ -514,11 +638,11 @@ export async function runOrchestrator(task, context) {
             imageGenerated = true;
             imageRawUrl = result.replace("IMAGE_URL:", "");
             if (imageRawUrl.startsWith("http")) imageHttpUrl = imageRawUrl;
-            result = "Image generated successfully.";
+            result = "Gambar dah siap.";
           } else if (result.startsWith("IMAGE_BASE64:")) {
             imageGenerated = true;
             imageRawUrl = result.replace("IMAGE_BASE64:", "");
-            result = "Image generated (base64).";
+            result = "Gambar dah siap.";
           } else if (!captionFromStep1 && result.length > 50) {
             captionFromStep1 = result;
           }
@@ -529,22 +653,23 @@ export async function runOrchestrator(task, context) {
         console.log("[" + step.agent + "] COMPLETE");
       } catch (stepErr) {
         console.error("[STEP FAILED] " + stepErr.message);
-        results.push({ step: step.step, agent: step.agent, action: step.action, result: "Step failed: " + stepErr.message });
+        results.push({ step: step.step, agent: step.agent, action: step.action, result: "Step gagal: " + stepErr.message });
       }
     }
 
+    // ✅ B3: Image routing — standalone → Telegram, content → Airtable
     if (imageGenerated && imageRawUrl) {
       if (taskType === "image") {
         console.log("[Image] Standalone -> Telegram");
         try {
           if (imageRawUrl.startsWith("data:image")) {
-            await sendTelegramBase64Image(imageRawUrl, "\uD83C\uDFA8 Generated by AURA", { chatId: chatId });
+            await sendTelegramBase64Image(imageRawUrl, "\uD83C\uDFA8 Gambar siap!", { chatId: chatId });
           } else if (imageRawUrl.startsWith("http")) {
-            await sendTelegramImage(imageRawUrl, "\uD83C\uDFA8 Generated by AURA", { chatId: chatId });
+            await sendTelegramImage(imageRawUrl, "\uD83C\uDFA8 Gambar siap!", { chatId: chatId });
           }
         } catch (imgErr) { console.error("[Image] Send failed: " + imgErr.message); }
       } else {
-        console.log("[Image] Content flow -> Airtable");
+        console.log("[Image] Content flow -> Airtable sahaja");
       }
     }
 
@@ -556,8 +681,11 @@ export async function runOrchestrator(task, context) {
 
     var trimmed = (finalResponse || "").trim();
     if (trimmed.indexOf("[{") === 0 || trimmed.indexOf("```") === 0) {
-      finalResponse = await callLLM(BOSS_CHAT_PROMPT, "Rewrite as casual Malay reply. No JSON.\n\n" + finalResponse, task, history);
+      finalResponse = await callLLM(BOSS_CHAT_PROMPT, "Tulis semula dalam BM santai. Jangan JSON.\n\n" + finalResponse, task, history);
     }
+
+    // ✅ A1: Persona sanitize
+    finalResponse = sanitizePersona(finalResponse);
 
     console.log("STEP 6: MEMORY");
     await saveMemory(task, finalResponse);
@@ -569,7 +697,7 @@ export async function runOrchestrator(task, context) {
 
   } catch (error) {
     console.error("ORCHESTRATOR FAILED: " + (error.message || error));
-    return { response: "Aduhh ada issue technical. Cuba lagi jap.", error: true };
+    return { response: "Alamak ada masalah teknikal. Cuba lagi kejap.", error: true };
   }
 }
 
