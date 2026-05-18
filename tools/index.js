@@ -9,7 +9,7 @@ export { supabaseQuery, supabaseInsert, supabaseSearch, searchMemory, saveMemory
 export { triggerN8n } from "./n8n.js";
 export { callToolLLM, webSearch, research, analyzeImage, writeContent, generateCaption } from "./ai.js";
 export { airtableCreate, airtableUpdate, airtableFindByFormula, airtableGet } from "./airtable.js";
-export { uploadImageToGDrive } from "./gdrive.js";
+export { uploadImageToGDrive, downloadAndUploadToGDrive, listGDriveFiles, deleteGDriveFile } from "./gdrive.js";
 export { saveConversation, getConversationHistory, getPreferences, savePreference, detectFeedback, buildContext, saveKnowledge, queryKnowledge, getMonthlyRecall } from "./memory.js";
 
 import { webSearch, research, analyzeImage, writeContent, generateCaption } from "./ai.js";
