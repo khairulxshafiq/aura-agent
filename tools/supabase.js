@@ -1,55 +1,45 @@
 // ============================================================
 // AURA v4.1 — tools/supabase.js (FIXED)
-// - Uses SUPABASE_SERVICE_ROLE_KEY when available (recommended)
-// - Aligns tables with SQL setup: memories + activity_logs
-// - Keeps legacy helpers: supabaseQuery, supabaseInsert, supabaseSearch
 // ============================================================
 
 import { createClient } from "@supabase/supabase-js";
 
-const SUPABASE_URL = process.env.SUPABASE_URL;
-const SUPABASE_KEY =
+var SUPABASE_URL = process.env.SUPABASE_URL;
+var SUPABASE_KEY =
   process.env.SUPABASE_SERVICE_ROLE_KEY ||
   process.env.SUPABASE_KEY ||
   process.env.SUPABASE_ANON_KEY;
 
-const TABLE_MEMORIES = process.env.SUPABASE_MEMORIES_TABLE || "memories";
-const TABLE_ACTIVITY = process.env.SUPABASE_ACTIVITY_TABLE || "activity_logs";
-
-let _client = null;
+var _client = null;
 
 function getClient() {
   if (_client) return _client;
   if (!SUPABASE_URL || !SUPABASE_KEY) {
-    console.warn(
-      "[Supabase] Missing SUPABASE_URL or SUPABASE key (set SUPABASE_SERVICE_ROLE_KEY recommended)."
-    );
+    console.warn("[Supabase] Missing URL or KEY.");
     return null;
   }
   _client = createClient(SUPABASE_URL, SUPABASE_KEY);
   return _client;
 }
 
-// === Existing functions (keep) ===
-export async function supabaseQuery(table, options = {}) {
-  const supabase = getClient();
+// === Legacy helpers ===
+
+export async function supabaseQuery(table, options) {
+  if (!options) options = {};
+  var supabase = getClient();
   if (!supabase) return [];
-
   try {
-    let query = supabase.from(table).select("*");
-
+    var query = supabase.from(table).select("*");
     if (options.order) query = query.order(options.order, { ascending: false });
     if (options.limit) query = query.limit(options.limit);
-
     if (options.filter) {
-      for (const [key, value] of Object.entries(options.filter)) {
-        query = query.eq(key, value);
+      for (var k in options.filter) {
+        query = query.eq(k, options.filter[k]);
       }
     }
-
-    const { data, error } = await query;
-    if (error) throw error;
-    return data || [];
+    var r = await query;
+    if (r.error) throw r.error;
+    return r.data || [];
   } catch (err) {
     console.error("[Supabase] query error:", err.message);
     return [];
@@ -57,33 +47,31 @@ export async function supabaseQuery(table, options = {}) {
 }
 
 export async function supabaseInsert(table, data) {
-  const supabase = getClient();
+  var supabase = getClient();
   if (!supabase) return null;
-
   try {
-    const { data: result, error } = await supabase.from(table).insert(data).select();
-    if (error) throw error;
-    console.log(`[Supabase] Inserted into ${table}`);
-    return result;
+    var r = await supabase.from(table).insert(data).select();
+    if (r.error) throw r.error;
+    console.log("[Supabase] Inserted into " + table);
+    return r.data;
   } catch (err) {
     console.error("[Supabase] insert error:", err.message);
     return null;
   }
 }
 
-export async function supabaseSearch(table, searchColumn, searchText, limit = 5) {
-  const supabase = getClient();
+export async function supabaseSearch(table, searchColumn, searchText, limit) {
+  if (!limit) limit = 5;
+  var supabase = getClient();
   if (!supabase) return [];
-
   try {
-    const { data, error } = await supabase
+    var r = await supabase
       .from(table)
       .select("*")
       .textSearch(searchColumn, searchText)
       .limit(limit);
-
-    if (error) throw error;
-    return data || [];
+    if (r.error) throw r.error;
+    return r.data || [];
   } catch (err) {
     console.error("[Supabase] search error:", err.message);
     return [];
@@ -94,87 +82,86 @@ export async function supabaseSearch(table, searchColumn, searchText, limit = 5)
 // Memory functions
 // ============================================================
 
-export async function searchMemory(query, chatId = null) {
-  const supabase = getClient();
+export async function searchMemory(query, chatId) {
+  var supabase = getClient();
   if (!supabase) return [];
 
   try {
-    // 1) Try RPC (fast + accurate)
-    const { data, error } = await supabase.rpc("search_memories", {
-      search_query: query,
-    });
-
-    if (!error && data) {
-      // If chatId provided, prefer matching chatId
+    // 1) Try RPC (fast)
+    var rpc = await supabase.rpc("search_memories", { search_query: query });
+    if (!rpc.error && rpc.data && rpc.data.length > 0) {
       if (chatId) {
-        const filtered = data.filter((x) => String(x.chat_id || "") === String(chatId));
-        return filtered.length ? filtered : data;
+        var filtered = rpc.data.filter(function (x) {
+          return String(x.chat_id || "") === String(chatId);
+        });
+        return filtered.length > 0 ? filtered : rpc.data;
       }
-      return data;
+      return rpc.data;
     }
 
-    if (error) {
-      console.warn("[Memory] RPC search_memories not available or failed:", error.message);
+    if (rpc.error) {
+      console.warn("[Memory] RPC failed:", rpc.error.message);
     }
 
-    // 2) Fallback: ilike search
-    let q = supabase.from(TABLE_MEMORIES).select("*");
+    // 2) Fallback: ilike
+    var q = supabase.from("memories").select("*");
     if (chatId) q = q.eq("chat_id", String(chatId));
 
-    const { data: fallback, error: err2 } = await q
-      .or(`task.ilike.%${query}%,result.ilike.%${query}%`)
+    var fb = await q
+      .or("task.ilike.%" + query + "%,result.ilike.%" + query + "%")
       .order("created_at", { ascending: false })
       .limit(5);
 
-    if (!err2) return fallback || [];
-
-    console.warn("[Memory] ilike fallback failed:", err2.message);
+    if (!fb.error) return fb.data || [];
 
     // 3) Last fallback: latest
-    let q2 = supabase.from(TABLE_MEMORIES).select("*");
+    var q2 = supabase.from("memories").select("*");
     if (chatId) q2 = q2.eq("chat_id", String(chatId));
+    var latest = await q2.order("created_at", { ascending: false }).limit(5);
+    return (latest.data) || [];
 
-    const { data: latest } = await q2.order("created_at", { ascending: false }).limit(5);
-    return latest || [];
   } catch (err) {
     console.error("[Memory] search failed:", err.message);
     return [];
   }
 }
 
-export async function saveMemory(task, result, chatId = null) {
-  const supabase = getClient();
+export async function saveMemory(task, result, chatId) {
+  var supabase = getClient();
   if (!supabase) return;
 
   try {
-    const payload = {
+    // TRUNCATE result to prevent tsvector overflow (max ~500KB safe)
+    var safeResult = typeof result === "string" ? result : JSON.stringify(result);
+    if (safeResult.length > 2000) {
+      safeResult = safeResult.substring(0, 2000) + "... [truncated]";
+    }
+
+    var payload = {
       chat_id: chatId ? String(chatId) : null,
-      task: task,
-      result: typeof result === "string" ? result : JSON.stringify(result),
+      task: (task || "").substring(0, 2000),
+      result: safeResult,
       created_at: new Date().toISOString(),
     };
 
-    const { error } = await supabase.from(TABLE_MEMORIES).insert(payload);
-    if (error) {
-      console.error("[Memory] save error:", error.message);
+    var r = await supabase.from("memories").insert(payload);
+    if (r.error) {
+      console.error("[Memory] save error:", r.error.message);
     }
   } catch (err) {
     console.error("[Memory] save failed:", err.message);
   }
 }
 
-export async function logActivity(action, input, output, status = "success") {
-  const supabase = getClient();
+export async function logActivity(action, input, output, status) {
+  if (!status) status = "success";
+  var supabase = getClient();
   if (!supabase) return;
-
   try {
-    await supabase.from(TABLE_ACTIVITY).insert({
+    await supabase.from("activity_logs").insert({
       action,
-      input: typeof input === "string" ? input : JSON.stringify(input),
-      output:
-        typeof output === "string"
-          ? output.substring(0, 2000)
-          : JSON.stringify(output).substring(0, 2000),
+      input: typeof input === "string" ? input.substring(0, 2000) : JSON.stringify(input).substring(0, 2000),
+      output: typeof output === "string" ? output.substring(0, 2000) : JSON.stringify(output).substring(0, 2000),
       status,
       created_at: new Date().toISOString(),
     });
@@ -182,12 +169,3 @@ export async function logActivity(action, input, output, status = "success") {
     console.error("[Tool] logActivity failed:", err.message);
   }
 }
-
-export default {
-  supabaseQuery,
-  supabaseInsert,
-  supabaseSearch,
-  searchMemory,
-  saveMemory,
-  logActivity,
-};
